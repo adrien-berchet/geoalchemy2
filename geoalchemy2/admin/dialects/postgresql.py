@@ -46,10 +46,10 @@ def create_spatial_index(bind, table, col):
 
 def reflect_geometry_column(inspector, table, column_info):
     """Reflect a column of type Geometry with Postgresql dialect."""
-    if not isinstance(column_info.get("type"), Geometry):
+    if not isinstance(column_info.get("type"), (Geometry, Geography, Raster)):
         return
     geo_type = column_info["type"]
-    geometry_type = geo_type.geometry_type
+    geometry_type = geo_type.geometry_type or "_"
     coord_dimension = geo_type.dimension
     if geometry_type.endswith("ZM"):
         coord_dimension = 4
@@ -82,6 +82,40 @@ def reflect_geometry_column(inspector, table, column_info):
     """.format(
         table.name, column_info["name"], schema_part
     )
+
+    has_index_query_toto = """SELECT (indexrelid IS NOT NULL) AS has_index
+        FROM (
+            SELECT
+                    n.nspname,
+                    c.relname,
+                    c.oid AS relid,
+                    a.attname,
+                    a.attnum
+            FROM pg_attribute a
+            INNER JOIN pg_class c ON (a.attrelid=c.oid)
+            INNER JOIN pg_type t ON (a.atttypid=t.oid)
+            INNER JOIN pg_namespace n ON (c.relnamespace=n.oid)
+            WHERE c.relkind='r'
+        ) g
+        LEFT JOIN pg_index i ON (g.relid = i.indrelid AND g.attnum = ANY(i.indkey))
+        WHERE relname = '{}' AND attname = '{}'{};
+    """.format(
+        table.name, column_info["name"], schema_part
+    )
+    print("++++++++++++++++++++++++++++++++++++", column_info)
+    print("++++++++++++++++++++++++++++++++++++", table.name, has_index_query_toto)
+    print(
+        "++++++++++++++++++++++++++++++++++++",
+        table.name,
+        inspector.bind.execute(text(has_index_query_toto)).fetchall(),
+    )
+
+    # if "rast" in column_info.get("type", {"name": ""}).name:
+    #     import pdb
+
+    #     pdb.set_trace()
+    #     print()
+
     spatial_index = inspector.bind.execute(text(has_index_query)).scalar()
 
     # Set attributes
@@ -91,6 +125,8 @@ def reflect_geometry_column(inspector, table, column_info):
 
     # Spatial indexes are automatically reflected with PostgreSQL dialect
     column_info["type"]._spatial_index_reflected = True
+
+    print("######################## column_info:", column_info)
 
 
 def before_create(table, bind, **kw):
@@ -102,10 +138,16 @@ def before_create(table, bind, **kw):
     # at this time.
     table.info["_after_create_indexes"] = []
     current_indexes = set(table.indexes)
+
+    # ##################### #
+    # import pdb
+    # pdb.set_trace()
+    # ##################### #
+
     for idx in current_indexes:
         for col in table.info["_saved_columns"]:
             if (
-                _check_spatial_type(col.type, Geometry, dialect) and check_management(col)
+                _check_spatial_type(col.type, (Geometry, Raster), dialect) and check_management(col)
             ) and col in idx.columns.values():
                 table.indexes.remove(idx)
                 if idx.name != _spatial_idx_name(table.name, col.name) or not getattr(
@@ -120,6 +162,11 @@ def after_create(table, bind, **kw):
     dialect = bind.dialect
 
     table.columns = table.info.pop("_saved_columns")
+
+    # ##################### #
+    # import pdb
+    # pdb.set_trace()
+    # ##################### #
 
     for col in table.columns:
         # Add the managed Geometry columns with AddGeometryColumn()

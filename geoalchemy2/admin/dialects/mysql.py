@@ -12,6 +12,7 @@ from geoalchemy2.admin.dialects.common import compile_bin_literal
 from geoalchemy2.admin.dialects.common import setup_create_drop
 from geoalchemy2.types import Geography
 from geoalchemy2.types import Geometry
+from geoalchemy2.types import Raster
 
 # Register Geometry, Geography and Raster to SQLAlchemy's reflection subsystems.
 _mysql_ischema_names["geometry"] = Geometry
@@ -38,7 +39,7 @@ _POSSIBLE_TYPES = [
 
 def reflect_geometry_column(inspector, table, column_info):
     """Reflect a column of type Geometry with Postgresql dialect."""
-    if not isinstance(column_info.get("type"), (Geometry, NullType)):
+    if not isinstance(column_info.get("type"), (Geometry, NullType, Geography, Raster)):
         return
 
     column_name = column_info.get("name")

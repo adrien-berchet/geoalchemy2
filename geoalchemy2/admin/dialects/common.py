@@ -9,6 +9,7 @@ from sqlalchemy.types import TypeDecorator
 
 from geoalchemy2.elements import WKBElement
 from geoalchemy2.types import Geometry
+from geoalchemy2.types import Raster
 
 _SQLALCHEMY_VERSION_BEFORE_14 = version.parse(sqlalchemy.__version__) < version.parse("1.4")
 
@@ -58,7 +59,7 @@ def _get_dispatch_info(table, bind, check_col_management=None):
 
     # Filter Geometry columns from the table
     # Note: Geography and PostGIS >= 2.0 don't need this
-    gis_cols = _get_gis_cols(table, Geometry, dialect, check_col_management=check_col_management)
+    gis_cols = _get_gis_cols(table, (Geometry, Raster), dialect, check_col_management=check_col_management)
 
     # Find all other columns that are not managed Geometries
     regular_cols = [x for x in table.columns if x not in gis_cols]
