@@ -223,7 +223,7 @@ def engine(tmpdir, db_url, _engine_echo, _require_all_dialects):
                     if "mariadb" in connection.execute(text("SELECT VERSION();")).scalar().lower()
                     else "MySQL"
                 )
-            if current_engine.dialect.name != mysql_type.lower():
+            if current_engine.dialect.name.lower() != mysql_type.lower():
                 msg = f"Can not execute {mysql_type} queries on {db_url}"
                 if _require_all_dialects:
                     pytest.fail("All dialects are required. " + msg)

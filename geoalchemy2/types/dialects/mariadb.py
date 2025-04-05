@@ -42,6 +42,11 @@ def bind_processor_process(spatial_type, bindvalue):
             bindvalue.srid = spatial_type.srid
         return bindvalue
     elif isinstance(bindvalue, WKBElement):
-        # With MariaDB we use Shapely to convert the WKBElement to an EWKT string
-        return to_shape(bindvalue).wkt
+        if "wkb" not in spatial_type.from_text.lower():
+            # With MariaDB we use Shapely to convert the WKBElement to an EWKT string
+            return to_shape(bindvalue).wkt
+        # MariaDB does not support raw binary data so we use the hex representation
+        return bindvalue.desc
+    elif isinstance(bindvalue, memoryview):
+        return bindvalue.tobytes().hex()
     return bindvalue
