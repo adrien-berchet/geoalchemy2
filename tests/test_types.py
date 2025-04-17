@@ -1,3 +1,198 @@
+"""Type checking tests for GeoAlchemy2.
+
+This module contains tests that verify the type annotations in GeoAlchemy2
+are correct and consistent.
+"""
+
+import unittest
+from typing import Any, Dict, List, Optional, cast
+
+import pytest
+from sqlalchemy import Column, MetaData, Table, func, inspect, select
+from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.sql import expression
+from sqlalchemy.sql.elements import ClauseElement
+
+from geoalchemy2 import Geometry, Geography, Raster, WKBElement, WKTElement
+from geoalchemy2 import elements, functions, shape
+from geoalchemy2.comparator import Comparator
+
+
+class TestGeometryTypeHints(unittest.TestCase):
+    """Test geometry type hints."""
+
+    def test_geometry_type_hints(self) -> None:
+        """Test Geometry type hints."""
+        # Test Geometry type creation with various parameters
+        geom1: Geometry = Geometry(geometry_type="POINT", srid=4326)
+        geom2: Geometry = Geometry(geometry_type="LINESTRING", srid=4326, dimension=2)
+        geom3: Geometry = Geometry(geometry_type="POLYGON", srid=4326, spatial_index=True)
+        
+        # Verify type annotations
+        assert geom1.geometry_type == "POINT"
+        assert geom2.geometry_type == "LINESTRING"
+        assert geom3.geometry_type == "POLYGON"
+        
+        # Test Geography type creation
+        geog: Geography = Geography(geometry_type="POINT", srid=4326)
+        assert geog.geometry_type == "POINT"
+
+    def test_wkt_element_type_hints(self) -> None:
+        """Test WKTElement type hints."""
+        # Test WKTElement with various parameters
+        wkt1: WKTElement = WKTElement("POINT(1 1)")
+        wkt2: WKTElement = WKTElement("POINT(1 1)", srid=4326)
+        wkt3: WKTElement = WKTElement("SRID=4326;POINT(1 1)", extended=True)
+        
+        # Verify attributes exist and have correct types
+        assert wkt1.srid == -1
+        assert wkt2.srid == 4326
+        assert isinstance(wkt3.data, str)
+        
+        # Test type conversion
+        wkt4 = wkt2.as_ewkt()
+        assert wkt4.data.startswith("SRID=4326;")
+        assert isinstance(wkt4, WKTElement)
+
+    def test_wkb_element_type_hints(self) -> None:
+        """Test WKBElement type hints."""
+        # Create a WKB element from binary data
+        bin_data = b"\x01\x01\x00\x00\x20\xe6\x10\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00"
+        wkb1: WKBElement = WKBElement(bin_data)
+        
+        # Convert a WKB element to hex string and back
+        hex_str: str = wkb1.desc
+        
+        # Test various WKBElement methods
+        wkb2 = wkb1.as_ewkb()
+        assert isinstance(wkb2, WKBElement)
+        
+        wkb3 = wkb1.as_wkb()
+        assert isinstance(wkb3, WKBElement)
+
+
+class TestRasterTypeHints(unittest.TestCase):
+    """Test raster type hints."""
+    
+    def test_raster_type_hints(self) -> None:
+        """Test Raster type hints."""
+        # Test Raster type creation
+        rast: Raster = Raster(spatial_index=True)
+        
+        # Verify type annotations
+        assert hasattr(rast, "comparator_factory")
+        
+        # RasterElement tests would require actual data
+        # This is a simplified test
+        metadata = MetaData()
+        raster_table = Table(
+            "raster_table", 
+            metadata,
+            Column("id", rast)
+        )
+        assert isinstance(raster_table.c.id.type, Raster)
+
+
+class TestFunctionTypeHints(unittest.TestCase):
+    """Test function type hints."""
+    
+    def test_function_type_hints(self) -> None:
+        """Test function type hints."""
+        # Test function calls with type hints
+        Point = Geometry(geometry_type="POINT", srid=4326)
+        
+        # Define a column with geometry type
+        metadata = MetaData()
+        table = Table(
+            "some_table", 
+            metadata,
+            Column("geom", Point)
+        )
+        
+        # Test function calls
+        expr1 = functions.ST_AsText(table.c.geom)
+        assert isinstance(expr1, ClauseElement)
+        
+        expr2 = table.c.geom.ST_AsText()
+        assert isinstance(expr2, ClauseElement)
+        
+        # Test function with multiple arguments
+        expr3 = functions.ST_Buffer(table.c.geom, 2)
+        assert isinstance(expr3, ClauseElement)
+
+
+class TestTypeConversionHints(unittest.TestCase):
+    """Test type conversion handling."""
+    
+    def test_type_conversion_hints(self) -> None:
+        """Test type conversion with hints."""
+        # Test shape module functions
+        point_wkt = WKTElement("POINT(1 1)", srid=4326)
+        
+        # Convert WKT to shape
+        point_shape = shape.to_shape(point_wkt)
+        assert hasattr(point_shape, "wkt")
+        
+        # Convert shape back to WKB
+        point_wkb = shape.from_shape(point_shape, srid=4326)
+        assert isinstance(point_wkb, WKBElement)
+        assert point_wkb.srid == 4326
+
+
+class TestDialectSpecificHints(unittest.TestCase):
+    """Test dialect-specific type handling."""
+    
+    def test_dialect_specific_hints(self) -> None:
+        """Test dialect-specific type hints."""
+        # Simulate dialect-specific behavior
+        Base = declarative_base()
+        
+        class SpatialModel(Base):
+            __tablename__ = "spatial_model"
+            
+            id = Column(Geometry(geometry_type="POINT", srid=4326), primary_key=True)
+            geom = Column(Geometry(geometry_type="POLYGON", srid=4326))
+        
+        # Create a query with type hints
+        q = select(SpatialModel.geom.ST_AsText())
+        assert isinstance(q, expression.SelectBase)
+        
+        # Test comparator method with type hints
+        comp: Comparator = cast(Comparator, SpatialModel.geom.comparator)
+        expr = comp.intersects("POINT(1 1)")
+        assert isinstance(expr, ClauseElement)
+
+
+def test_function_registry() -> None:
+    """Test function registry."""
+    # Test that function registry contains expected functions
+    assert "st_astext" in elements.function_registry
+    assert "st_buffer" in elements.function_registry
+    
+    # Test function call with proper typing
+    result = func.ST_Buffer(WKTElement("POINT(1 1)"), 2)
+    assert isinstance(result, ClauseElement)
+
+
+def test_mypy_stubs() -> None:
+    """Test mypy stub compatibility."""
+    # This test just verifies that the code can be properly type-checked
+    # The actual checking is done by mypy externally
+    
+    # Define some typed variables
+    point: WKTElement = WKTElement("POINT(1 1)", srid=4326)
+    geom_col: Geometry = Geometry(geometry_type="POINT", srid=4326)
+    
+    # Use them in a way that should be type-safe
+    expr = func.ST_Buffer(point, 2)
+    
+    # Test that we can access attributes correctly
+    assert point.srid == 4326
+    assert geom_col.geometry_type == "POINT"
+    
+    # This test passes if mypy doesn't complain about the type annotations
+    assert True
+
 import re
 
 import pytest

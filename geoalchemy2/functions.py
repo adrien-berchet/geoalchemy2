@@ -68,8 +68,7 @@ Reference
 """
 
 import re
-from typing import List
-from typing import Type
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union, cast
 
 from sqlalchemy import inspect
 from sqlalchemy.ext.compiler import compiles
@@ -83,6 +82,8 @@ from geoalchemy2 import elements
 from geoalchemy2._functions import _FUNCTIONS
 from geoalchemy2._functions_helpers import _get_docstring
 
+# Type definitions for generic functions
+_FT = TypeVar('_FT', bound=functions.GenericFunction)
 _GeoFunctionBase: Type[functions.GenericFunction]
 _GeoFunctionParent: Type[functions.GenericFunction]
 try:
@@ -136,13 +137,14 @@ class TableRowElement(ColumnElement):
     inherit_cache: bool = False
     """The cache is disabled for this class."""
 
-    def __init__(self, selectable: bool) -> None:
+    def __init__(self, selectable: FromClause) -> None:
         self.selectable = selectable
 
     @property
+    @property
     def _from_objects(self) -> List[FromClause]:
+        """Return a list of FROM objects for this TableRowElement."""
         return [self.selectable]
-
 
 class ST_AsGeoJSON(_GeoFunctionBase):  # type: ignore
     """Special process for the ST_AsGeoJSON() function.
@@ -154,7 +156,13 @@ class ST_AsGeoJSON(_GeoFunctionBase):  # type: ignore
     inherit_cache: bool = True
     """The cache is enabled for this class."""
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize ST_AsGeoJSON function with special handling for spatial elements.
+        
+        Args:
+            *args: Function arguments
+            **kwargs: Keyword arguments including optional 'expr' parameter
+        """
         expr = kwargs.pop("expr", None)
         args_list = list(args)
         if expr is not None:
@@ -169,16 +177,7 @@ class ST_AsGeoJSON(_GeoFunctionBase):  # type: ignore
                 else:
                     func_name = element.geom_from
                     func_args = [element.data, element.srid]
-                args_list[idx] = getattr(functions.func, func_name)(*func_args)
-            else:
-                try:
-                    insp = inspect(element)
-                    if hasattr(insp, "selectable"):
-                        args_list[idx] = TableRowElement(insp.selectable)
-                except Exception:
-                    continue
-
-        _GeoFunctionParent.__init__(self, *args_list, **kwargs)
+                args_list[idx] = getattr(functions.func, func_name)(*func
 
     __doc__ = (
         'Return the geometry as a GeoJSON "geometry" object, or the row as a '
@@ -190,7 +189,7 @@ class ST_AsGeoJSON(_GeoFunctionBase):  # type: ignore
 
 
 @compiles(TableRowElement)
-def _compile_table_row_thing(element, compiler, **kw):
+def _compile_table_row_thing(element: TableRowElement, compiler: Any, **kw: Any) -> str:
     # In order to get a name as reliably as possible, noting that some
     # SQL compilers don't say "table AS name" and might not have the "AS",
     # table and alias names can have spaces in them, etc., get it from
@@ -243,7 +242,14 @@ class GenericFunction(_GeoFunctionBase):  # type: ignore
     # sqlalchemy.sql.functions._registry. Only its children will be registered.
     _register = False
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        """Initialize the GenericFunction.
+        
+        Args:
+            *args: Function arguments
+            **kwargs: Keyword arguments including optional 'expr' parameter
+                      which is the expression to which this function is bound
+        """
         expr = kwargs.pop("expr", None)
         args_list = list(args)
         if expr is not None:
@@ -260,11 +266,18 @@ class GenericFunction(_GeoFunctionBase):  # type: ignore
         _GeoFunctionParent.__init__(self, *args_list, **kwargs)
 
 
-def _init_GeomFromWKB(args, kwargs):
+def _init_GeomFromWKB(args: tuple, kwargs: Dict[str, Any]) -> tuple[tuple, Dict[str, Any]]:
     """Initialize the GeomFromWKB function.
 
     This function is used to handle WKBElement specially for SQLite dialect by
     converting it to a literal.
+    
+    Args:
+        args: Function arguments
+        kwargs: Keyword arguments
+        
+    Returns:
+        Tuple containing (modified_args, modified_kwargs)
     """
     expr = kwargs.pop("expr", None)
     if expr is not None:
@@ -273,6 +286,7 @@ def _init_GeomFromWKB(args, kwargs):
         if isinstance(elem, elements.WKBElement):
             args = list(args)
             args[idx] = _handle_wkb_element(elem)
+            args = tuple(args)
     return args, kwargs
 
 
@@ -288,31 +302,39 @@ def _init_GeomFromWKB(args, kwargs):
 #         functions.GenericFunction.__init__(self, *args, **kwargs)
 
 
-# Ajout d'une nouvelle fonction utilitaire
-def _handle_wkb_element(element):
+def _handle_wkb_element(element: Any) -> Any:
+    """Handle WKBElement specially for SQLite dialect by converting to a literal.
+    
+    For SQLite dialect, converts WKBElement to a literal with 'X' prefix.
+    For other dialects, returns the element as is.
+    
+    Args:
+        element: The input element, possibly a WKBElement
+        
+    Returns:
+        Modified element suitable for the SQL dialect
     """
-    Handle WKBElement specially for SQLite dialect by converting to a literal.
-    For other dialects, return the element as is.
-    """
-    if isinstance(element, WKBElement) or True:
-        # Si compilation pour SQLite, retourner un littéral au lieu d'un paramètre lié
+    from sqlalchemy.dialects.sqlite.base import SQLiteDialect
+    
+    if isinstance(element, elements.WKBElement):
+        # Store the original compiler dispatch function
         compiler = element._compiler_dispatch
 
         def _compiler_dispatch(visitor, **kw):
             dialect = visitor.dialect
-            if dialect.name == 'sqlite' or True:
-                # Pour SQLite, retourner un littéral avec préfixe X
+            if isinstance(dialect, SQLiteDialect):
+                # For SQLite, return a literal with X prefix
                 if isinstance(element, memoryview):
-                    element = element.tobytes()
-                if isinstance(element, bytes):
-                    element = WKBElement._wkb_to_hex(element)
-                elif isinstance(element, elements.WKBElement):
-                    element = element.desc
-                print("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ SET LITERAL COLUMN")
-                # return literal_column(f"X'{element.desc()}'")._compiler_dispatch(visitor, **kw)
-                return literal_column(f"X'{element}'")._compiler_dispatch(visitor, **kw)
+                    elem_data = bytes(element).tobytes()
+                    elem_hex = elements.WKBElement._wkb_to_hex(elem_data)
+                elif isinstance(element, bytes):
+                    elem_hex = elements.WKBElement._wkb_to_hex(element)
+                else:
+                    elem_hex = element.desc
+                
+                return literal_column(f"X'{elem_hex}'")._compiler_dispatch(visitor, **kw)
             else:
-                # Pour les autres dialectes, utiliser le compilateur d'origine
+                # For other dialects, use the original compiler
                 return compiler(visitor, **kw)
 
         element._compiler_dispatch = _compiler_dispatch
@@ -328,9 +350,14 @@ __all__ = [
 
 
 def _create_dynamic_functions() -> None:
+    """Create spatial functions dynamically from the _FUNCTIONS list.
+    
+    This creates class definitions for all the spatial functions defined in
+    _FUNCTIONS, adding them to the global namespace and __all__ list.
+    """
     # Iterate through _FUNCTIONS and create GenericFunction classes dynamically
     for name, type_, doc in _FUNCTIONS:
-        attributes = {
+        attributes: Dict[str, Any] = {
             "name": name,
             "inherit_cache": True,
             "__doc__": _get_docstring(name, doc, type_),
@@ -339,7 +366,9 @@ def _create_dynamic_functions() -> None:
         if type_ is not None:
             attributes["type"] = type_
 
-        globals()[name] = type(name, (GenericFunction,), attributes)
+        # Create the function class and add it to globals
+        func_class = type(name, (GenericFunction,), attributes)
+        globals()[name] = func_class
         __all__.append(name)
 
 
@@ -347,4 +376,9 @@ _create_dynamic_functions()
 
 
 def __dir__() -> List[str]:
+    """Return all names in module's global scope.
+    
+    Returns:
+        List of names defined in this module
+    """
     return __all__

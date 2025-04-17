@@ -8,7 +8,8 @@ from typing import Dict
 from typing import List
 from typing import Optional
 from typing import Set
-from typing import Union
+from typing import TypeVar
+from typing import cast
 
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import functions
@@ -63,10 +64,10 @@ class _SpatialElement:
     def __ne__(self, other) -> bool:
         return not self.__eq__(other)
 
-    def __hash__(self):
+    def __hash__(self) -> int:
         return hash((self.desc, self.srid, self.extended))
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         #
         # This is how things like lake.geom.ST_Buffer(2) creates
         # SQL expressions of this form:
@@ -102,7 +103,17 @@ class _SpatialElement:
         self.data = self._data_from_desc(state["data"])
 
     @staticmethod
-    def _data_from_desc(desc):
+    def _data_from_desc(desc: str) -> Any:
+        """Convert description string to data format.
+        
+        Must be implemented by subclasses.
+        
+        Args:
+            desc: Description string
+            
+        Returns:
+            The data in appropriate format
+        """
         raise NotImplementedError()  # pragma: no cover
 
 
@@ -143,7 +154,17 @@ class WKTElement(_SpatialElement):
         return self.data
 
     @staticmethod
-    def _data_from_desc(desc):
+    def _data_from_desc(desc: str) -> str:
+        """Convert description string to data format.
+        
+        For WKTElement, description is the data.
+        
+        Args:
+            desc: WKT string
+            
+        Returns:
+            The WKT string unchanged
+        """
         return desc
 
     def as_wkt(self) -> WKTElement:
@@ -178,7 +199,7 @@ class WKBElement(_SpatialElement):
     geom_from_extended_version: str = "ST_GeomFromEWKB"
 
     def __init__(
-        self, data: Union[str, bytes, memoryview], srid: int = -1, extended: Optional[bool] = None
+        self, data: str | bytes | memoryview, srid: int = -1, extended: Optional[bool] = None
     ) -> None:
         if srid == -1 or extended is None or extended:
             # read srid from the EWKB
@@ -217,7 +238,7 @@ class WKBElement(_SpatialElement):
         _SpatialElement.__init__(self, data, srid, extended)
 
     @staticmethod
-    def _wkb_to_hex(data: Union[str, bytes, memoryview]) -> str:
+    def _wkb_to_hex(data: str | bytes | memoryview) -> str:
         """Convert WKB to hex string."""
         if isinstance(data, str):
             # SpatiaLite case
@@ -230,7 +251,17 @@ class WKBElement(_SpatialElement):
         return self._wkb_to_hex(self.data)
 
     @staticmethod
-    def _data_from_desc(desc) -> bytes:
+    def _data_from_desc(desc: str) -> bytes:
+        """Convert description string to binary data.
+        
+        For WKBElement, description is a hex string.
+        
+        Args:
+            desc: Hex string
+            
+        Returns:
+            Binary data decoded from hex string
+        """
         desc = desc.encode(encoding="utf-8")
         return binascii.unhexlify(desc)
 
@@ -281,7 +312,7 @@ class WKBElement(_SpatialElement):
             )
             wkb_type_int |= 536870912  # Set SRID bit to 1 and keep all other bits
 
-            data: Union[str, memoryview]
+            data: str | memoryview
             if isinstance(self.data, str):
                 wkb_type_hex = binascii.hexlify(
                     wkb_type_int.to_bytes(4, "little" if byte_order else "big")
@@ -306,10 +337,10 @@ class WKBElement(_SpatialElement):
             return WKBElement(data, self.srid, extended=True)
         return WKBElement(self.data, self.srid)
 
-    def __str__(self):
+    def __str__(self) -> str:
         return self.desc
 
-    def _compiler_dispatch(self, visitor, **kw):
+    def _compiler_dispatch(self, visitor: Any, **kw: Any) -> Any:
         return visitor.process(self.bind_expression())
 
 
@@ -318,24 +349,82 @@ class RasterElement(_SpatialElement):
 
     Raster values read from the database are converted to instances of this type. In
     most cases you won't need to create ``RasterElement`` instances yourself.
+
+    Args:
+        data: The raster data in either binary (bytes/memoryview) or
+            hexadecimal string format.
     """
 
     geom_from_extended_version: str = "raster"
 
-    def __init__(self, data: Union[str, bytes, memoryview]) -> None:
+    def __init__(self, data: str | bytes | memoryview) -> None:
         # read srid from the WKB (binary or hexadecimal format)
         # The WKB structure is documented in the file
         # raster/doc/RFC2-WellKnownBinaryFormat of the PostGIS sources.
-        bin_data: Union[str, bytes, memoryview]
-        try:
-            bin_data = binascii.unhexlify(data[:114])
-        except BinasciiError:
+        # Header format:
+        # - byte 0: endianness (0=big, 1=little)
+        # - bytes 1-2: version (16-bit unsigned)
+        # - bytes 3-4: number of bands (16-bit unsigned)
+        # - bytes 5-12: scale X (double)
+        # - bytes 13-20: scale Y (double)
+        # - bytes 21-28: IP X (double)
+        # - bytes 29-36: IP Y (double)
+        # - bytes 37-44: skew X (double)
+        # - bytes 45-52: skew Y (double)
+        # - bytes 53-56: SRID (32-bit signed)
+        # - bytes 57-58: width (16-bit unsigned)
+        # - bytes 59-60: height (16-bit unsigned)
+
+        # We need at least 61 bytes for a minimal raster header
+        MIN_HEADER_SIZE = 61
+        
+        # Convert hex string to binary if needed
+        bin_data: bytes | memoryview
+        hex_input = False
+        
+        if isinstance(data, str):
+            hex_input = True
+            try:
+                # Need at least MIN_HEADER_SIZE*2 hex chars for a valid header
+                if len(data) < MIN_HEADER_SIZE * 2:
+                    raise ValueError(f"Raster hex data too short: {len(data)} chars, need at least {MIN_HEADER_SIZE * 2}")
+                bin_data = binascii.unhexlify(data[:MIN_HEADER_SIZE * 2])
+            except BinasciiError as e:
+                raise ValueError(f"Invalid hex data for raster: {e}") from e
+        else:
+            # Handle binary input (bytes or memoryview)
+            if len(data) < MIN_HEADER_SIZE:
+                raise ValueError(f"Raster binary data too short: {len(data)} bytes, need at least {MIN_HEADER_SIZE}")
             bin_data = data
-            data = str(binascii.hexlify(data).decode(encoding="utf-8"))  # type: ignore
-        byte_order = bin_data[0]
-        srid = bin_data[53:57]
-        srid = struct.unpack("<I" if byte_order else ">I", srid)[0]  # type: ignore
-        _SpatialElement.__init__(self, data, int(srid), True)
+            # Convert binary to hex string for storage
+            data_str = str(binascii.hexlify(data if isinstance(data, bytes) else bytes(data)).decode(encoding="utf-8"))
+
+        # Extract endianness
+        try:
+            byte_order = bin_data[0]
+            if byte_order not in (0, 1):
+                raise ValueError(f"Invalid byte order in raster: {byte_order}, must be 0 or 1")
+                
+            # Determine the format string for struct.unpack
+            endian_fmt = "<" if byte_order == 1 else ">"
+            
+            # Extract SRID (bytes 53-56)
+            srid_bytes = bin_data[53:57]
+            if len(srid_bytes) != 4:
+                raise ValueError(f"Could not extract SRID bytes from raster data, got {len(srid_bytes)} bytes")
+                
+            srid = struct.unpack(f"{endian_fmt}i", srid_bytes)[0]
+            
+            # Store the data
+            if hex_input:
+                # If input was hex, use the original string
+                _SpatialElement.__init__(self, data, int(srid), True)
+            else:
+                # If input was binary, use our hex string
+                _SpatialElement.__init__(self, data_str, int(srid), True)
+                
+        except (IndexError, struct.error) as e:
+            raise ValueError(f"Error parsing raster data: {e}") from e
 
     @property
     def desc(self) -> str:
@@ -343,7 +432,17 @@ class RasterElement(_SpatialElement):
         return self.data
 
     @staticmethod
-    def _data_from_desc(desc):
+    def _data_from_desc(desc: str) -> str:
+        """Convert description string to data format.
+        
+        For RasterElement, description is the data (hex format).
+        
+        Args:
+            desc: Raster data in hex format
+            
+        Returns:
+            The hex string unchanged
+        """
         return desc
 
 
@@ -353,7 +452,14 @@ class CompositeElement(FunctionElement):
     inherit_cache: bool = False
     """The cache is disabled for this class."""
 
-    def __init__(self, base, field, type_) -> None:
+    def __init__(self, base: Any, field: str, type_: Any) -> None:
+        """Initialize CompositeElement.
+        
+        Args:
+            base: Base SQL element
+            field: Field name to access
+            type_: SQLAlchemy type
+        """
         self.name = field
         self.type = to_instance(type_)
 
@@ -361,7 +467,17 @@ class CompositeElement(FunctionElement):
 
 
 @compiles(CompositeElement)
-def _compile_pgelem(expr, compiler, **kw) -> str:
+def _compile_pgelem(expr: CompositeElement, compiler: Any, **kw: Any) -> str:
+    """Compile CompositeElement to SQL.
+    
+    Args:
+        expr: CompositeElement to compile
+        compiler: SQLAlchemy SQL compiler
+        **kw: Additional keyword arguments
+        
+    Returns:
+        Compiled SQL string
+    """
     return "(%s).%s" % (compiler.process(expr.clauses, **kw), expr.name)
 
 
