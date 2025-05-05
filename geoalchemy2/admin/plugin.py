@@ -1,6 +1,7 @@
 from collections import defaultdict
 from functools import partial
 
+import geoalchemy2
 from sqlalchemy import event
 from sqlalchemy.engine import CreateEnginePlugin
 
@@ -94,5 +95,15 @@ class GeoEngine(CreateEnginePlugin):
 
         if hasattr(dialect_module, "before_cursor_execute"):
             params = dict(self.params["before_cursor_execute"].get(engine.dialect.name, {}))
+
+            if engine.dialect.name == "mysql":
+                # MySQL dialect has a special case for the before_cursor_execute event
+                # where it needs to be called with the convert parameter.
+                params["func"] = geoalchemy2.admin.dialects.mysql._cast
+            if engine.dialect.name == "sqlite":
+                # SQLite dialect has a special case for the before_cursor_execute event
+                # where it needs to be called with the init_mode parameter.
+                params["func"] = geoalchemy2.admin.dialects.sqlite._cast
             func = partial(dialect_module.before_cursor_execute, **params)
+            # print("+++++++++++++++++++++++++++++++++++++ Attaching before_cursor_execute", dialect_module, dialect_module.before_cursor_execute, "Common:";, geoalchemy2.admin.dialects.common.before_cursor_execute, "MySQL:", geoalchemy2.admin.dialects.mysql.before_cursor_execute)
             event.listen(engine, "before_cursor_execute", func, retval=True)

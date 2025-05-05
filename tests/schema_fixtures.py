@@ -14,7 +14,7 @@ from geoalchemy2 import Raster
 
 
 @pytest.fixture
-def Lake(base, postgis_version, schema):
+def Lake(base, schema):
     class Lake(base):
         __tablename__ = "lake"
         __table_args__ = {"schema": schema}

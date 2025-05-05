@@ -8,10 +8,12 @@ from sqlalchemy.sql.sqltypes import NullType
 from geoalchemy2 import functions
 from geoalchemy2.admin.dialects.common import _check_spatial_type
 from geoalchemy2.admin.dialects.common import _spatial_idx_name
+from geoalchemy2.admin.dialects.common import before_cursor_execute
 from geoalchemy2.admin.dialects.common import compile_bin_literal
 from geoalchemy2.admin.dialects.common import setup_create_drop
 from geoalchemy2.types import Geography
 from geoalchemy2.types import Geometry
+from geoalchemy2.elements import WKBElement
 
 # Register Geometry, Geography and Raster to SQLAlchemy's reflection subsystems.
 _mysql_ischema_names["geometry"] = Geometry
@@ -85,23 +87,58 @@ def reflect_geometry_column(inspector, table, column_info):
     )
 
 
-def before_cursor_execute(
-    conn, cursor, statement, parameters, context, executemany, convert=True
-):  # noqa: D417
-    """Event handler to cast the parameters properly.
+# def _cast(param):
+#     if isinstance(param, memoryview):
+#         param = param.tobytes()
+#     if isinstance(param, bytes):
+#         param = WKBElement(param)
+#     if isinstance(param, WKBElement):
+#         param = param.as_wkb().data.tobytes()
+#     return param
 
-    Args:
-        convert (bool): Trigger the conversion.
-    """
-    if convert:
-        if isinstance(parameters, (tuple, list)):
-            parameters = tuple(x.tobytes() if isinstance(x, memoryview) else x for x in parameters)
-        elif isinstance(parameters, dict):
-            for k in parameters:
-                if isinstance(parameters[k], memoryview):
-                    parameters[k] = parameters[k].tobytes()
 
-    return statement, parameters
+# def before_cursor_execute(
+#     conn, cursor, statement, parameters, context, executemany, convert=True
+# ):  # noqa: D417
+#     """Event handler to cast the parameters properly.
+
+#     Args:
+#         convert (bool): Trigger the conversion.
+#     """
+#     if convert:
+#         if isinstance(parameters, (tuple, list)):
+#             parameters = tuple(_cast(x) for x in parameters)
+#         elif isinstance(parameters, dict):
+#             for k in parameters:
+#                 parameters[k] = _cast(parameters[k])
+#     return statement, parameters
+
+
+def _cast(param):
+    print("===================================================== In _cast", param)
+    if isinstance(param, WKBElement):
+        param = param.data
+    if isinstance(param, memoryview):
+        print("===================================================== Memoryview detected")
+        param = param.tobytes()
+    return param
+
+
+# def before_cursor_execute(
+#     conn, cursor, statement, parameters, context, executemany, convert=True
+# ):  # noqa: D417
+#     """Event handler to cast the parameters properly.
+#     Args:
+#         convert (bool): Trigger the conversion.
+#     """
+#     if convert:
+#         statement, parameters = before_cursor_execute_common(conn, cursor, statement, parameters, context, executemany)
+#         if isinstance(parameters, (tuple, list)):
+#             parameters = tuple(_cast(x) for x in parameters)
+#         elif isinstance(parameters, dict):
+#             for k in parameters:
+#                 parameters[k] = _cast(parameters[k])
+#     return statement, parameters
 
 
 def before_create(table, bind, **kw):
@@ -200,6 +237,8 @@ def _compile_GeomFromText_MySql(element, compiler, **kw):
 
 
 def _compile_GeomFromWKB_MySql(element, compiler, **kw):
+    identifier = "ST_GeomFromWKB"
+
     # Store the SRID
     clauses = list(element.clauses)
     try:
@@ -209,19 +248,22 @@ def _compile_GeomFromWKB_MySql(element, compiler, **kw):
 
     if kw.get("literal_binds", False):
         wkb_clause = compile_bin_literal(clauses[0])
+    else:
+        wkb_clause = clauses[0]
+
+    if isinstance(wkb_clause.value, str) and wkb_clause.value.startswith("0"):
         prefix = "unhex("
         suffix = ")"
     else:
-        wkb_clause = clauses[0]
         prefix = ""
         suffix = ""
 
     compiled = compiler.process(wkb_clause, **kw)
 
     if srid > 0:
-        return "{}({}{}{}, {})".format(element.identifier, prefix, compiled, suffix, srid)
+        return "{}({}{}{}, {})".format(identifier, prefix, compiled, suffix, srid)
     else:
-        return "{}({}{}{})".format(element.identifier, prefix, compiled, suffix)
+        return "{}({}{}{})".format(identifier, prefix, compiled, suffix)
 
 
 @compiles(functions.ST_GeomFromText, "mysql")  # type: ignore

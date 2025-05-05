@@ -6,6 +6,7 @@ columns/properties in models.
 """
 
 import re
+import binascii
 import warnings
 from typing import Any
 from typing import Dict
@@ -31,7 +32,10 @@ from geoalchemy2.comparator import Comparator
 from geoalchemy2.elements import CompositeElement
 from geoalchemy2.elements import RasterElement
 from geoalchemy2.elements import WKBElement
+from geoalchemy2.elements import WKTElement
 from geoalchemy2.exc import ArgumentError
+from geoalchemy2.shape import from_shape
+from geoalchemy2.shape import to_shape
 from geoalchemy2.types import dialects
 
 
@@ -106,6 +110,10 @@ class _GISType(UserDefinedType):
     """ The name of the "as binary" function for this type.
         Set in subclasses. """
 
+    to_text: Optional[str] = None
+    """ The name of the "to text" function for this type.
+        Set in subclasses. """
+
     comparator_factory: Any = Comparator
     """ This is the way by which spatial operators are defined for
         geometry/geography columns. """
@@ -122,8 +130,11 @@ class _GISType(UserDefinedType):
         use_N_D_index: bool = False,
         use_typmod: Optional[bool] = None,
         from_text: Optional[str] = None,
+        to_text: Optional[str] = None,
+        as_binary: Optional[str] = None,
         name: Optional[str] = None,
         nullable: bool = True,
+        representation: Optional[str] = None,
         _spatial_index_reflected=None,
     ) -> None:
         geometry_type, srid, dimension = self.check_ctor_args(
@@ -135,13 +146,49 @@ class _GISType(UserDefinedType):
             self.name = name
         if from_text is not None:
             self.from_text = from_text
+        if to_text is not None:
+            self.to_text = to_text
+        if as_binary is not None:
+            if to_text is not None:
+                raise ArgumentError(
+                    "The 'as_binary' and 'to_text' arguments can not be used together"
+                )
+            self.to_text = as_binary
+        if self.to_text is None:
+            self.to_text = self.as_binary
         self.dimension = dimension
         self.spatial_index = spatial_index
         self.use_N_D_index = use_N_D_index
         self.use_typmod = use_typmod
-        self.extended: Optional[bool] = self.as_binary == "ST_AsEWKB"
         self.nullable = nullable
         self._spatial_index_reflected = _spatial_index_reflected
+
+        if representation is not None:
+            self.representation = representation.lower()
+            if self.representation not in ["wkb", "wkt"]:
+                raise ArgumentError(
+                    "The representation must be either 'wkb' or 'wkt', "
+                    "but got %s" % self.representation
+                )
+        else:
+            input_type = self.from_text[-4:].lower()
+            if input_type[-1] == "t" or input_type == "text":
+                self.representation = "wkt"
+            elif input_type[-1] == "b":
+                self.representation = "wkb"
+
+        output_type = self.to_text[-4:].lower()
+        if output_type[-4] != "e":
+            self.extended = False
+        else:
+            self.extended = True
+        # self.extended: bool = "ewkb" in self.to_text.lower()
+
+        if not hasattr(self, "ElementType"):
+            self.ElementType = {
+                "wkb": WKBElement,
+                "wkt": WKTElement,
+            }[self.representation]
 
     def get_col_spec(self):
         if not self.geometry_type:
@@ -150,7 +197,7 @@ class _GISType(UserDefinedType):
 
     def column_expression(self, col):
         """Specific column_expression that automatically adds a conversion function."""
-        return getattr(func, self.as_binary)(col, type_=self)
+        return getattr(func, self.to_text)(col, type_=self)
 
     def result_processor(self, dialect, coltype):
         """Specific result_processor that automatically process spatial elements."""
@@ -160,21 +207,70 @@ class _GISType(UserDefinedType):
                 kwargs = {}
                 if self.srid > 0:
                     kwargs["srid"] = self.srid
-                if self.extended is not None and dialect.name not in ["mysql", "mariadb"]:
+                if self.extended is not None:
                     kwargs["extended"] = self.extended
                 return self.ElementType(value, **kwargs)
 
         return process
 
     def bind_expression(self, bindvalue):
-        """Specific bind_expression that automatically adds a conversion function."""
-        return getattr(func, self.from_text)(bindvalue, type_=self)
+        """Specific bind_expression that automatically adds a conversion function.
+
+        This method is used when binding values to the database. We can add a function
+        to convert the value to a specific format.
+
+        Note for later: it could be relevant to convert the `bindvalue` to a
+        WKB or WKT string here so that the database can use it directly. It would probably make
+        other functions simpler.
+        """
+        return getattr(func, self.from_text)(bindvalue, self.srid, type_=self)
 
     def bind_processor(self, dialect):
         """Specific bind_processor that automatically process spatial elements."""
 
         def process(bindvalue):
-            return select_dialect(dialect.name).bind_processor_process(self, bindvalue)
+            print("####################################### bind_processor", str(bindvalue))
+
+            if input_type == "wkt":
+                # Use the WKTElement to convert the value to a WKT string
+                if isinstance(bindvalue, str):
+                    bindvalue = WKTElement(bindvalue)
+                if isinstance(bindvalue, WKTElement):
+                    if extended_input:
+                        if bindvalue.srid is not None and bindvalue.srid != self.srid:
+                            bindvalue = bindvalue.as_wkt()
+                        bindvalue = bindvalue.as_ewkt()
+                    return bindvalue.data
+                elif isinstance(bindvalue, WKBElement):
+                    shape_element = to_shape(bindvalue)
+                    if extended_input:
+                        bindvalue = bindvalue.as_ewkb()
+                    else:
+                        bindvalue = bindvalue.wkt
+                    return bindvalue.data
+
+            elif input_type == "wkb":
+                if isinstance(bindvalue, str | bytes | memoryview):
+                    try:
+                        # If the string is a valid WKB, we try to parse it as such.
+                        return WKBElement(bindvalue).as_wkb().data
+                    except Exception:
+                        # If the string is not a valid WKB, we assume it is a WKT
+                        # and try to parse it as such.
+                        wkt_element = WKTElement(bindvalue)
+                        shape_element = to_shape(wkt_element)
+                        srid = wkt_element.srid or -1
+                        bindvalue = from_shape(shape_element, srid=srid if srid > 0 else None)
+                elif isinstance(bindvalue, WKTElement):
+                    bindvalue = bindvalue.as_wkt()
+                    shape_element = to_shape(bindvalue)
+                    srid = bindvalue.srid or -1
+                    bindvalue = from_shape(shape_element, srid=srid if srid > 0 else None)
+
+                if isinstance(bindvalue, WKBElement):
+                    bindvalue = bindvalue.as_wkb().data
+
+            return bindvalue
 
         return process
 
@@ -260,11 +356,11 @@ class Geometry(_GISType):
     name = "geometry"
     """ Type name used for defining geometry columns in ``CREATE TABLE``. """
 
-    from_text = "ST_GeomFromEWKT"
+    from_text = "ST_GeomFromWKB"
     """ The "from text" geometry constructor. Used by the parent class'
         ``bind_expression`` method. """
 
-    as_binary = "ST_AsEWKB"
+    as_binary = "ST_AsBinary"
     """ The "as binary" function to use. Used by the parent class'
         ``column_expression`` method. """
 
@@ -290,7 +386,7 @@ class Geography(_GISType):
     name = "geography"
     """ Type name used for defining geography columns in ``CREATE TABLE``. """
 
-    from_text = "ST_GeogFromText"
+    from_text = "ST_GeogFromWKB"
     """ The ``FromText`` geography constructor. Used by the parent class'
         ``bind_expression`` method. """
 
@@ -304,6 +400,18 @@ class Geography(_GISType):
 
     cache_ok = True
     """ Disable cache for this type. """
+
+    def bind_expression(self, bindvalue):
+        """Specific bind_expression that automatically adds a conversion function.
+
+        This method is used when binding values to the database. We can add a function
+        to convert the value to a specific format.
+
+        Note for later: it could be relevant to convert the `bindvalue` to a
+        WKB or WKT string here so that the database can use it directly. It would probably make
+        other functions simpler.
+        """
+        return getattr(func, self.from_text)(bindvalue, type_=self)
 
 
 class Raster(_GISType):
@@ -363,6 +471,29 @@ class Raster(_GISType):
     @staticmethod
     def check_ctor_args(*args, **kwargs):
         return None, -1, None
+
+    def bind_expression(self, bindvalue):
+        """Specific bind_expression that automatically adds a conversion function.
+
+        This method is used when binding values to the database. We can add a function
+        to convert the value to a specific format.
+
+        Note for later: it could be relevant to convert the `bindvalue` to a
+        WKB or WKT string here so that the database can use it directly. It would probably make
+        other functions simpler.
+        """
+        return getattr(func, self.from_text)(bindvalue, type_=self)
+
+    def bind_processor(self, dialect):
+        """Specific bind_processor that automatically process spatial elements."""
+
+        def process(bindvalue):
+            if isinstance(bindvalue, RasterElement):
+                return "%s" % (bindvalue.data)
+
+            return bindvalue
+
+        return process
 
 
 class _DummyGeometry(Geometry):

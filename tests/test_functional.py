@@ -484,20 +484,74 @@ class TestInsertionCore:
             {"geom": WKTElement(inserted_wkt, srid=4326)},
             {"geom": WKTElement(f"SRID=4326;{inserted_wkt}")},
         ]
-        if dialect_name not in ["postgresql", "sqlite"] or not has_m:
-            # Use the DB to generate the corresponding raw WKB
-            raw_wkb = conn.execute(
-                text("SELECT ST_AsBinary(ST_GeomFromText('{}', 4326))".format(inserted_wkt))
-            ).scalar()
 
-            wkb_elem = WKBElement(raw_wkb, srid=4326)
+        # if dialect_name not in ["postgresql", "sqlite"] or not has_m:
+        # Use the DB to generate the corresponding raw WKB
+        raw_wkb = conn.execute(
+            text("SELECT ST_AsBinary(ST_GeomFromText('{}', 4326))".format(inserted_wkt))
+        ).scalar()
 
-            # Currently Shapely does not support geometry types with M dimension
-            inserted_elements.append({"geom": wkb_elem})
-            inserted_elements.append({"geom": wkb_elem.as_ewkb()})
+        print("raw_wkb:", raw_wkb)
+        wkb_elem = WKBElement(raw_wkb, srid=4326)
 
+        # Currently Shapely does not support geometry types with M dimension
+        inserted_elements.append({"geom": wkb_elem})
+        inserted_elements.append({"geom": wkb_elem.as_ewkb()})
+
+        print()
+        print("###########################################################################################")
+        print(f"inserted_elements (dialect_name: {dialect_name}):")
         print(inserted_elements)
+        print("###########################################################################################")
         # raise ValueError()
+
+        for num, i in enumerate(inserted_elements):
+            i = i["geom"]
+            print("+++++++++++++++++++++++++++++++", num, type(i), i)
+            if isinstance(i, str):
+                if "SRID" in i:
+                    i = WKTElement(i).as_wkt()
+                else:
+                    i = WKTElement(i, srid=4326).as_wkt()
+                print("String converted into:", i)
+            if isinstance(i, WKTElement):
+                i = i.as_wkt()
+                shape_element = to_shape(i)
+                srid = i.srid or -1
+
+                # ##################### #
+                # import pdb
+                # pdb.set_trace()
+                # ##################### #
+
+                i = from_shape(shape_element, srid=srid if srid > 0 else None)
+                print("WKT converted into:", i)
+            if isinstance(i, WKBElement):
+                i = i.as_wkb()
+                print("WKB converted into:", i)
+            zz = conn.execute(select([func.ST_AsBinary(i)])).fetchall()
+            print("$$$$$$$ WKB =>", zz[0][0])
+            aa = conn.execute(select([func.ST_AsText(func.ST_GeomFromWKB(zz[0][0]))])).fetchall()
+            print("$$$$$$$ WKT =>", aa)
+            # conn.execute(
+            #     GeomTypeTable.__table__.insert(),
+            #     [
+            #         {
+            #             "geom": i,
+            #         }
+            #     ],
+            # )
+            print()
+            print("*******************************************************")
+            conn.execute(text("INSERT INTO test_geom_types (geom) VALUES (ST_GeomFromWKB(:wkb, 4326))"), [{"wkb": i.data}])
+            print("*******************************************************")
+            print()
+        # ##################### #
+        # import pdb
+        # pdb.set_trace()
+        # ##################### #
+
+        print("###########################################################################################")
 
         # Insert the elements
         conn.execute(
@@ -516,8 +570,14 @@ class TestInsertionCore:
         results = conn.execute(query)
         rows = results.all()
 
+        print("###########################################################################################")
+        print("Rows:")
+        print(rows)
+        print("###########################################################################################")
+
         # Check that the selected elements are the same as the inputs
         for row_id, row, srid in rows:
+            print("Row ID:", row_id)
             checked_wkt = row.upper().replace(" ", "")
             expected_wkt = inserted_wkt.upper().replace(" ", "")
             if "MULTIPOINT" in geom_type:
@@ -616,7 +676,7 @@ class TestInsertionCore:
             assert format_wkt(wkt) == "POINT(1 1)"
             srid = conn.execute(row[1].ST_SRID()).scalar()
             assert srid == 4326
-            assert row[1] == from_shape(Point(1, 1), srid=4326, extended=True)
+            assert row[1] == from_shape(Point(1, 1), srid=4326)
 
     def test_insert_negative_coords(self, conn, Poi, setup_tables, dialect_name):
         conn.execute(
@@ -640,7 +700,7 @@ class TestInsertionCore:
             srid = conn.execute(row[1].ST_SRID()).scalar()
             assert srid == 4326
             extended = dialect_name not in ["mysql", "mariadb"]
-            assert row[1] == from_shape(Point(-1, 1), srid=4326, extended=extended)
+            assert row[1] == from_shape(Point(-1, 1), srid=4326)
 
 
 class TestSelectBindParam:
@@ -1091,12 +1151,66 @@ class TestCallFunction:
         with pytest.raises(AttributeError):
             select([lake.geom.ST_UnknownFunction(2)])
 
+    @pytest.mark.parametrize(
+        "compared_element,expected_assert",
+        [
+            pytest.param(WKTElement("LINESTRING(0.5 -0.5, 0.5 0.5)", srid=4326), True, id="intersecting WKTElement"),
+            pytest.param(
+                WKTElement("LINESTRING(10 10, 11 11)", srid=4326), False, id="not intersecting WKTElement"
+            ),
+            pytest.param(
+                WKTElement("SRID=4326;LINESTRING(0.5 -0.5, 0.5 0.5)"),
+                True,
+                id="intersecting extended WKTElement",
+            ),
+            pytest.param(
+                WKTElement("SRID=4326;LINESTRING(10 10, 11 11)"),
+                False,
+                id="not intersecting extended WKTElement",
+            ),
+            pytest.param(
+                WKBElement(
+                    "01020000000200000000000000000000000000000000000000000000000000F03F000000000000F03F",
+                    4326,
+                ),
+                True,
+                id="intersecting WKBElement",
+            ),
+            pytest.param(
+                WKBElement(
+                    "0102000000020000000000000000002440000000000000244000000000000026400000000000002640",
+                    4326,
+                ),
+                False,
+                id="not intersecting WKBElement",
+            ),
+            pytest.param(
+                WKBElement(
+                    "0102000020E61000000200000000000000000000000000000000000000000000000000F03F000000000000F03F"
+                ),
+                True,
+                id="intersecting extended WKBElement",
+            ),
+            pytest.param(
+                WKBElement(
+                    "0102000020E6100000020000000000000000002440000000000000244000000000000026400000000000002640"
+                ),
+                False,
+                id="not intersecting extended WKBElement",
+            ),
+        ],
+    )
+    def test_where_clause(self, session, Lake, setup_one_lake, compared_element, expected_assert):
+        query = Lake.__table__.select().where(Lake.__table__.c.geom.ST_Intersects(compared_element))
+
+        res = session.execute(query).fetchall()
+
+        assert bool(res) == expected_assert
+
 
 class TestShapely:
     def test_to_shape(self, session, Lake, setup_tables, dialect_name):
-        if dialect_name in ["sqlite", "geopackage"]:
-            data_type = str
-        elif dialect_name in ["mysql", "mariadb"]:
+        if dialect_name in ["mysql", "mariadb", "sqlite", "geopackage"]:
             data_type = bytes
         else:
             data_type = memoryview

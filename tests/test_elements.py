@@ -392,10 +392,7 @@ class TestExtendedWKBElement:
         assert e6.extended is False
         # The arbitrary SRID overwrites the original SRID in the EWKB string
         e6_ewkb = WKBElement(self._bin_ewkb, srid=arbitrary_srid)
-        data = bytearray(e6_ewkb.data)
-        data[5] = 4
-        e6_ewkb.data = memoryview(data)
-        assert e6.as_ewkb() == e6_ewkb
+        assert e6.as_ewkb() == e6_ewkb.as_wkb().as_ewkb()
 
         # Hex with no arbitrary SRID
         e7 = e3.as_wkb()
@@ -411,8 +408,7 @@ class TestExtendedWKBElement:
         assert e8.extended is False
         # The arbitrary SRID overwrites the original SRID in the EWKB string
         e8_ewkb = WKBElement(self._hex_ewkb, srid=arbitrary_srid)
-        e8_ewkb.data = e8_ewkb.data[:11] + "4" + e8_ewkb.data[12:]
-        assert e8.as_ewkb() == e8_ewkb
+        assert e8.as_ewkb() == e8_ewkb.as_wkb().as_ewkb()
 
 
 class TestWKBElement:

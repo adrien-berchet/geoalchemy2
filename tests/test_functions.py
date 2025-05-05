@@ -31,7 +31,7 @@ def _test_simple_func(name):
 def _test_geometry_returning_func(name):
     eq_sql(
         getattr(func, name)(1).select(),
-        'SELECT ST_AsEWKB(%(name)s(:%(name)s_2)) AS "%(name)s_1"' % dict(name=name),
+        'SELECT ST_AsBinary(%(name)s(:%(name)s_2)) AS "%(name)s_1"' % dict(name=name),
     )
 
 
@@ -61,7 +61,7 @@ def test_predefined_function() -> None:
     geom = geoalchemy2.functions.ST_GeomFromText("POINT(0, 0)")
     eq_sql(
         select(geoalchemy2.functions.ST_Buffer(geom, 1.0)),
-        "SELECT ST_AsEWKB(ST_Buffer(ST_GeomFromText(:ST_GeomFromText_1), "
+        "SELECT ST_AsBinary(ST_Buffer(ST_GeomFromText(:ST_GeomFromText_1), "
         ':ST_Buffer_2)) AS "ST_Buffer_1"',
     )
 

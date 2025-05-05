@@ -98,7 +98,9 @@ def select(args):
 
 
 def format_wkt(wkt):
-    return wkt.replace(", ", ",")
+    if isinstance(wkt, str):
+        wkt = wkt.replace(", ", ",")
+    return wkt
 
 
 def copy_and_connect_sqlite_db(input_db, tmp_db, engine_echo, dialect):

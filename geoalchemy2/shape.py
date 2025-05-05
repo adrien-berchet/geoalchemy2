@@ -80,7 +80,7 @@ def from_shape(shape, srid: int = -1, extended: Optional[bool] = False) -> WKBEl
         ewkb_element = from_shape(Point(5, 45), srid=4326, extended=True)
     """
     return WKBElement(
-        memoryview(dumps(shape, srid=srid if extended else None)),
+        memoryview(dumps(shape, srid=srid if extended else None, flavor="iso" if not extended else "extended")),
         srid=srid,
         extended=extended,
     )

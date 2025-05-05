@@ -3,6 +3,7 @@
 import os
 from typing import Optional
 
+from geoalchemy2.elements import WKBElement
 from sqlalchemy import text
 from sqlalchemy.dialects.sqlite.base import ischema_names as _sqlite_ischema_names
 from sqlalchemy.ext.compiler import compiles
@@ -13,6 +14,7 @@ from geoalchemy2 import functions
 from geoalchemy2.admin.dialects.common import _check_spatial_type
 from geoalchemy2.admin.dialects.common import _format_select_args
 from geoalchemy2.admin.dialects.common import _spatial_idx_name
+from geoalchemy2.admin.dialects.common import before_cursor_execute
 from geoalchemy2.admin.dialects.common import compile_bin_literal
 from geoalchemy2.admin.dialects.common import setup_create_drop
 from geoalchemy2.types import Geography
@@ -405,14 +407,25 @@ def register_sqlite_mapping(mapping):
 register_sqlite_mapping(_SQLITE_FUNCTIONS)
 
 
+def _cast(param):
+    print("===================================================== In _cast", param)
+    # if isinstance(param, bytes):
+    #     print("===================================================== Bytes detected")
+    #     param = WKBElement(param).data
+    if isinstance(param, memoryview):
+        print("===================================================== Memoryview detected")
+        param = param.tobytes()
+    return param
+
+
 def _compile_GeomFromWKB_SQLite(element, compiler, *, identifier, **kw):
-    element.identifier = identifier
+    # element.identifier = identifier
 
     # Store the SRID
     clauses = list(element.clauses)
     try:
         srid = clauses[1].value
-        element.type.srid = srid
+        # element.type.srid = srid
     except (IndexError, TypeError, ValueError):
         srid = element.type.srid
 
@@ -435,9 +448,9 @@ def _compile_GeomFromWKB_SQLite(element, compiler, *, identifier, **kw):
 
 @compiles(functions.ST_GeomFromWKB, "sqlite")  # type: ignore
 def _SQLite_ST_GeomFromWKB(element, compiler, **kw):
-    return _compile_GeomFromWKB_SQLite(element, compiler, identifier="GeomFromWKB", **kw)
+    return _compile_GeomFromWKB_SQLite(element, compiler, identifier="ST_GeomFromWKB", **kw)
 
 
 @compiles(functions.ST_GeomFromEWKB, "sqlite")  # type: ignore
 def _SQLite_ST_GeomFromEWKB(element, compiler, **kw):
-    return _compile_GeomFromWKB_SQLite(element, compiler, identifier="GeomFromEWKB", **kw)
+    return _compile_GeomFromWKB_SQLite(element, compiler, identifier="ST_GeomFromWKB", **kw)

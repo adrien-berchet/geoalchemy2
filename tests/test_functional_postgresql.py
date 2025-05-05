@@ -291,6 +291,7 @@ class TestInsertionCore:
                 {"geog": WKTElement("POINT(1 1)", srid=4326)},
                 {"geog": WKTElement("SRID=4326;POINT(1 1)", extended=True)},
                 {"geog": from_shape(Point(1, 1), srid=4326)},
+                # {"geog": from_shape(Point(1, 1), srid=4326)},
             ],
         )
 
