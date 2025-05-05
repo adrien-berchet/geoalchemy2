@@ -39,7 +39,7 @@ def point_reference(request):
 class TestOperator:
     def test_eq(self, geometry_table, point_reference):
         expr = geometry_table.c.geom == point_reference
-        eq_sql(expr, '"table".geom = ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom = ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_eq_with_None(self, geometry_table):
         expr = geometry_table.c.geom == None  # NOQA
@@ -47,7 +47,7 @@ class TestOperator:
 
     def test_ne(self, geometry_table, point_reference):
         expr = geometry_table.c.geom != point_reference
-        eq_sql(expr, '"table".geom != ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom != ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_ne_with_None(self, geometry_table):
         expr = geometry_table.c.geom != None  # NOQA
@@ -55,63 +55,63 @@ class TestOperator:
 
     def test_intersects(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.intersects(point_reference)
-        eq_sql(expr, '"table".geom && ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom && ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_overlaps_or_to_left(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.overlaps_or_to_left(point_reference)
-        eq_sql(expr, '"table".geom &< ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom &< ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_overlaps_or_below(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.overlaps_or_below(point_reference)
-        eq_sql(expr, '"table".geom &<| ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom &<| ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_overlaps_or_to_right(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.overlaps_or_to_right(point_reference)
-        eq_sql(expr, '"table".geom &> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom &> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_to_left(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.to_left(point_reference)
-        eq_sql(expr, '"table".geom << ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom << ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_lshift(self, geometry_table, point_reference):
         expr = geometry_table.c.geom << point_reference
-        eq_sql(expr, '"table".geom << ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom << ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_below(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.below(point_reference)
-        eq_sql(expr, '"table".geom <<| ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom <<| ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_to_right(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.to_right(point_reference)
-        eq_sql(expr, '"table".geom >> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom >> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_rshift(self, geometry_table, point_reference):
         expr = geometry_table.c.geom >> point_reference
-        eq_sql(expr, '"table".geom >> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom >> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_contained(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.contained(point_reference)
-        eq_sql(expr, '"table".geom @ ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom @ ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_overlaps_or_above(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.overlaps_or_above(point_reference)
-        eq_sql(expr, '"table".geom |&> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom |&> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_above(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.above(point_reference)
-        eq_sql(expr, '"table".geom |>> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom |>> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_contains(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.contains(point_reference)
-        eq_sql(expr, '"table".geom ~ ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom ~ ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_same(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.same(point_reference)
-        eq_sql(expr, '"table".geom ~= ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom ~= ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_distance_centroid(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.distance_centroid(point_reference)
-        eq_sql(expr, '"table".geom <-> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom <-> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_distance_centroid_select(self, geometry_table, point_reference):
         s = (
@@ -121,26 +121,26 @@ class TestOperator:
         )
         eq_sql(
             s,
-            'SELECT ST_AsEWKB("table".geom) AS geom '
+            'SELECT ST_AsBinary("table".geom) AS geom '
             'FROM "table" '
-            'ORDER BY "table".geom <-> ST_GeomFromEWKT(:geom_1) '
+            'ORDER BY "table".geom <-> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1) '
             "LIMIT :param_1",
         )
-        assert s.compile().params == {"geom_1": point_reference, "param_1": 10}
+        assert s.compile().params == {"geom_1": point_reference, 'ST_GeomFromWKB_1': -1, "param_1": 10}
 
     def test_distance_centroid_select_with_label(self, geometry_table, point_reference):
         s = select([geometry_table.c.geom.distance_centroid(point_reference).label("dc")])
         s = s.order_by("dc").limit(10)
         eq_sql(
             s,
-            'SELECT "table".geom <-> ST_GeomFromEWKT(:geom_1) AS dc '
+            'SELECT "table".geom <-> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1) AS dc '
             'FROM "table" ORDER BY dc LIMIT :param_1',
         )
-        assert s.compile().params == {"geom_1": point_reference, "param_1": 10}
+        assert s.compile().params == {"geom_1": point_reference, 'ST_GeomFromWKB_1': -1, "param_1": 10}
 
     def test_distance_box(self, geometry_table, point_reference):
         expr = geometry_table.c.geom.distance_box(point_reference)
-        eq_sql(expr, '"table".geom <#> ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom <#> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')
 
     def test_distance_box_select(self, geometry_table, point_reference):
         s = (
@@ -150,25 +150,25 @@ class TestOperator:
         )
         eq_sql(
             s,
-            'SELECT ST_AsEWKB("table".geom) AS geom '
+            'SELECT ST_AsBinary("table".geom) AS geom '
             'FROM "table" '
-            'ORDER BY "table".geom <#> ST_GeomFromEWKT(:geom_1) '
+            'ORDER BY "table".geom <#> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1) '
             "LIMIT :param_1",
         )
-        assert s.compile().params == {"geom_1": point_reference, "param_1": 10}
+        assert s.compile().params == {"geom_1": point_reference, 'ST_GeomFromWKB_1': -1, "param_1": 10}
 
     def test_distance_box_select_with_label(self, geometry_table, point_reference):
         s = select([geometry_table.c.geom.distance_box(point_reference).label("dc")])
         s = s.order_by("dc").limit(10)
         eq_sql(
             s,
-            'SELECT "table".geom <#> ST_GeomFromEWKT(:geom_1) AS dc '
+            'SELECT "table".geom <#> ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1) AS dc '
             'FROM "table" ORDER BY dc LIMIT :param_1',
         )
-        assert s.compile().params == {"geom_1": point_reference, "param_1": 10}
+        assert s.compile().params == {"geom_1": point_reference, 'ST_GeomFromWKB_1': -1, "param_1": 10}
 
     def test_intersects_nd(self, geometry_table):
         expr = geometry_table.c.geom.intersects_nd(
-            "Box3D(ST_GeomFromEWKT('LINESTRING(1 2 3, 3 4 5, 5 6 5)'));"
+            "Box3D(ST_GeomFromWKB('LINESTRING(1 2 3, 3 4 5, 5 6 5)'));"
         )
-        eq_sql(expr, '"table".geom &&& ST_GeomFromEWKT(:geom_1)')
+        eq_sql(expr, '"table".geom &&& ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)')

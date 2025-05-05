@@ -8,6 +8,7 @@ from sqlalchemy.sql import expression
 from sqlalchemy.types import TypeDecorator
 
 from geoalchemy2.elements import WKBElement
+from geoalchemy2.elements import WKTElement
 from geoalchemy2.types import Geometry
 
 _SQLALCHEMY_VERSION_BEFORE_14 = version.parse(sqlalchemy.__version__) < version.parse("1.4")
@@ -124,3 +125,46 @@ def compile_bin_literal(wkb_clause):
             unique=True,
         )
     return wkb_clause
+
+
+def _cast(param):
+    # if isinstance(param, memoryview):
+    #     param = param.tobytes()
+    # if isinstance(param, bytes):
+    #     param = WKBElement(param)
+    if isinstance(param, WKTElement):
+        param = param.to_wkt().data
+    if isinstance(param, WKBElement):
+        param = param.data
+    return param
+
+
+def _traverse_parameters(param, func):
+    """Recursively traverse the parameters to cast the values."""
+    if isinstance(param, (tuple, list)):
+        return tuple(_traverse_parameters(x, func) for x in param)
+    elif isinstance(param, dict):
+        return {k: _traverse_parameters(v, func) for k, v in param.items()}
+    else:
+        return func(param)
+
+
+def before_cursor_execute(
+    conn, cursor, statement, parameters, context, executemany, convert=True, func=None
+):  # noqa: D417
+    """Event handler to cast the parameters properly.
+
+    Args:
+        convert (bool): Trigger the conversion.
+    """
+    if convert:
+        print("===================================================== In before_cursor_execute", parameters)
+        if func is None:
+            func = _cast
+        parameters = _traverse_parameters(parameters, func)
+        # if isinstance(parameters, (tuple, list)):
+        #     parameters = tuple(func(x) for x in parameters)
+        # elif isinstance(parameters, dict):
+        #     for k in parameters:
+        #         parameters[k] = func(parameters[k])
+    return statement, parameters

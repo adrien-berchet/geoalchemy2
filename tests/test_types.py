@@ -87,26 +87,26 @@ class TestGeometry:
 
     def test_column_expression(self, geometry_table):
         s = select([geometry_table.c.geom])
-        eq_sql(s, 'SELECT ST_AsEWKB("table".geom) AS geom FROM "table"')
+        eq_sql(s, 'SELECT ST_AsBinary("table".geom) AS geom FROM "table"')
 
     def test_select_bind_expression(self, geometry_table):
         s = select([text("foo")]).where(geometry_table.c.geom == "POINT(1 2)")
         eq_sql(
             s,
-            'SELECT foo FROM "table" WHERE ' '"table".geom = ST_GeomFromEWKT(:geom_1)',
+            'SELECT foo FROM "table" WHERE ' '"table".geom = ST_GeomFromWKB(:geom_1, :ST_GeomFromWKB_1)',
         )
-        assert s.compile().params == {"geom_1": "POINT(1 2)"}
+        assert s.compile().params == {"geom_1": "POINT(1 2)", "ST_GeomFromWKB_1": -1}
 
     def test_insert_bind_expression(self, geometry_table):
         i = insert(geometry_table).values(geom="POINT(1 2)")
-        eq_sql(i, 'INSERT INTO "table" (geom) VALUES (ST_GeomFromEWKT(:geom))')
-        assert i.compile().params == {"geom": "POINT(1 2)"}
+        eq_sql(i, 'INSERT INTO "table" (geom) VALUES (ST_GeomFromWKB(:geom, :ST_GeomFromWKB_1))')
+        assert i.compile().params == {"geom": "POINT(1 2)", "ST_GeomFromWKB_1": -1}
 
     def test_function_call(self, geometry_table):
         s = select([geometry_table.c.geom.ST_Buffer(2)])
         eq_sql(
             s,
-            'SELECT ST_AsEWKB(ST_Buffer("table".geom, :ST_Buffer_2)) '
+            'SELECT ST_AsBinary(ST_Buffer("table".geom, :ST_Buffer_2)) '
             'AS "ST_Buffer_1" FROM "table"',
         )
 
@@ -120,7 +120,7 @@ class TestGeometry:
         s = select([geometry_table]).alias("name").select()
         eq_sql(
             s,
-            "SELECT ST_AsEWKB(name.geom) AS geom FROM "
+            "SELECT ST_AsBinary(name.geom) AS geom FROM "
             '(SELECT "table".geom AS geom FROM "table") AS name',
         )
 
@@ -142,20 +142,20 @@ class TestGeography:
         s = select([text("foo")]).where(geography_table.c.geom == "POINT(1 2)")
         eq_sql(
             s,
-            'SELECT foo FROM "table" WHERE ' '"table".geom = ST_GeogFromText(:geom_1)',
+            'SELECT foo FROM "table" WHERE ' '"table".geom = ST_GeogFromWKB(:geom_1)',
         )
         assert s.compile().params == {"geom_1": "POINT(1 2)"}
 
     def test_insert_bind_expression(self, geography_table):
         i = insert(geography_table).values(geom="POINT(1 2)")
-        eq_sql(i, 'INSERT INTO "table" (geom) VALUES (ST_GeogFromText(:geom))')
+        eq_sql(i, 'INSERT INTO "table" (geom) VALUES (ST_GeogFromWKB(:geom))')
         assert i.compile().params == {"geom": "POINT(1 2)"}
 
     def test_function_call(self, geography_table):
         s = select([geography_table.c.geom.ST_Buffer(2)])
         eq_sql(
             s,
-            'SELECT ST_AsEWKB(ST_Buffer("table".geom, :ST_Buffer_2)) '
+            'SELECT ST_AsBinary(ST_Buffer("table".geom, :ST_Buffer_2)) '
             'AS "ST_Buffer_1" FROM "table"',
         )
 
@@ -249,4 +249,4 @@ class TestCompositeType:
     def test_ST_Dump(self, geography_table):
         s = select([func.ST_Dump(geography_table.c.geom).geom.label("geom")])
 
-        eq_sql(s, 'SELECT ST_AsEWKB((ST_Dump("table".geom)).geom) AS geom ' 'FROM "table"')
+        eq_sql(s, 'SELECT ST_AsBinary((ST_Dump("table".geom)).geom) AS geom ' 'FROM "table"')

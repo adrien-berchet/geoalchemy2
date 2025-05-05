@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import binascii
+from hmac import new
 import re
 import struct
 from typing import Any
@@ -10,6 +11,7 @@ from typing import Optional
 from typing import Set
 from typing import Union
 
+from geoalchemy2 import exc
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import functions
 from sqlalchemy.sql.functions import FunctionElement
@@ -130,7 +132,7 @@ class WKTElement(_SpatialElement):
     __slots__ = ()
 
     _REMOVE_SRID = re.compile("(SRID=([0-9]+); ?)?(.*)")
-    SPLIT_WKT_PATTERN = re.compile(r"((SRID=\d+) *; *)?([\w ]+) *(\([-\d\. ,\(\)]+\))")
+    SPLIT_WKT_PATTERN = re.compile(r"((SRID=(\d+)) *; *)?([\w ]+) *(\([-\d\. ,\(\)]+\))")
 
     geom_from: str = "ST_GeomFromText"
     geom_from_extended_version: str = "ST_GeomFromEWKT"
@@ -145,7 +147,7 @@ class WKTElement(_SpatialElement):
                 raise ArgumentError("invalid EWKT string {}".format(data))
             header = data_s[0]
             try:
-                srid = int(header[5:])
+                srid = int(header[5:].rstrip())
             except ValueError:
                 raise ArgumentError("invalid EWKT string {}".format(data))
         _SpatialElement.__init__(self, data, srid, extended)
@@ -210,41 +212,46 @@ class WKBElement(_SpatialElement):
     def __init__(
         self, data: str | bytes | memoryview, srid: int = -1, extended: Optional[bool] = None
     ) -> None:
-        if srid == -1 or extended is None or extended:
-            # read srid from the EWKB
-            #
-            # WKB struct {
-            #    byte    byteOrder;
-            #    uint32  wkbType;
-            #    uint32  SRID;
-            #    struct  geometry;
-            # }
-            # byteOrder enum {
-            #     WKB_XDR = 0,  // Most Significant Byte First
-            #     WKB_NDR = 1,  // Least Significant Byte First
-            # }
-            # See https://trac.osgeo.org/postgis/browser/branches/3.0/doc/ZMSgeoms.txt
-            # for more details about WKB/EWKB specifications.
+        try:
             if isinstance(data, str):
-                # SpatiaLite case
-                # assume that the string is an hex value
-                header = binascii.unhexlify(data[:18])
+                # Convert the hex WKB into a binary WKB
+                # (assume that the string is an hex value)
+                internal_data = binascii.unhexlify(data)
             else:
-                header = data[:9]
-            byte_order, wkb_type, wkb_srid = header[0], header[1:5], header[5:]
-            byte_order_marker = "<I" if byte_order else ">I"
-            wkb_type_int = (
-                int(struct.unpack(byte_order_marker, wkb_type)[0]) if len(wkb_type) == 4 else 0
-            )
-            if extended is None:
-                if not wkb_type_int:
-                    extended = False
-                else:
-                    extended = extended or bool(wkb_type_int & 536870912)  # Check SRID bit
-            if extended and srid == -1:
-                wkb_srid = struct.unpack(byte_order_marker, wkb_srid)[0]
-                srid = int(wkb_srid)
-        _SpatialElement.__init__(self, data, srid, extended)
+                internal_data = data
+            if srid == -1 or extended is None or extended:
+                # read srid from the EWKB
+                #
+                # WKB struct {
+                #    byte    byteOrder;
+                #    uint32  wkbType;
+                #    uint32  SRID;
+                #    struct  geometry;
+                # }
+                # byteOrder enum {
+                #     WKB_XDR = 0,  // Most Significant Byte First
+                #     WKB_NDR = 1,  // Least Significant Byte First
+                # }
+                # See https://trac.osgeo.org/postgis/browser/branches/3.0/doc/ZMSgeoms.txt
+                # for more details about WKB/EWKB specifications.
+                # else:
+                header = internal_data[:9]
+                byte_order, wkb_type, wkb_srid = header[0], header[1:5], header[5:]
+                byte_order_marker = "<I" if byte_order else ">I"
+                wkb_type_int = (
+                    int(struct.unpack(byte_order_marker, wkb_type)[0]) if len(wkb_type) == 4 else 0
+                )
+                if extended is None:
+                    if not wkb_type_int:
+                        extended = False
+                    else:
+                        extended = extended or bool(wkb_type_int & 536870912)  # Check SRID bit
+                if extended and srid == -1:
+                    wkb_srid = struct.unpack(byte_order_marker, wkb_srid)[0]
+                    srid = int(wkb_srid)
+        except Exception:
+            raise ArgumentError("The given WKB string could not be processed: {}".format(data))
+        _SpatialElement.__init__(self, internal_data, srid, extended)
 
     @staticmethod
     def _wkb_to_hex(data: Union[str, bytes, memoryview]) -> str:

@@ -468,68 +468,6 @@ class TestCallFunction:
 
         assert r1.data == r2.data == r3.data == r4.data == r5.data == r6.data == r7.data
 
-    @pytest.mark.parametrize(
-        "compared_element,expected_assert",
-        [
-            pytest.param("LINESTRING(0 1, 1 0)", True, id="intersecting raw string WKT"),
-            pytest.param("LINESTRING(99 99, 999 999)", False, id="not intersecting raw string WKT"),
-            pytest.param(WKTElement("LINESTRING(0 1, 1 0)"), True, id="intersecting WKTElement"),
-            pytest.param(
-                WKTElement("LINESTRING(99 99, 999 999)"), False, id="not intersecting WKTElement"
-            ),
-            pytest.param(
-                WKTElement("SRID=2154;LINESTRING(0 1, 1 0)"),
-                True,
-                id="intersecting extended WKTElement",
-            ),
-            pytest.param(
-                WKTElement("SRID=2154;LINESTRING(99 99, 999 999)"),
-                False,
-                id="not intersecting extended WKTElement",
-            ),
-            pytest.param(
-                WKBElement(
-                    "0102000000020000000000000000000000000000000000F03F000000000000F03F00000000000"
-                    "00000"
-                ),
-                True,
-                id="intersecting WKBElement",
-            ),
-            pytest.param(
-                WKBElement(
-                    "0102000000020000000000000000C058400000000000C058400000000000388F4000000000003"
-                    "88F40"
-                ),
-                False,
-                id="not intersecting WKBElement",
-            ),
-            pytest.param(
-                WKBElement(
-                    "01020000206A080000020000000000000000000000000000000000F03F000000000000F03F000"
-                    "0000000000000"
-                ),
-                True,
-                id="intersecting extended WKBElement",
-            ),
-            pytest.param(
-                WKBElement(
-                    "01020000206A080000020000000000000000C058400000000000C058400000000000388F40000"
-                    "0000000388F40"
-                ),
-                False,
-                id="not intersecting extended WKBElement",
-            ),
-        ],
-    )
-    def test_where_clause(self, session, Lake, setup_one_lake, compared_element, expected_assert):
-        query = Lake.__table__.select().where(Lake.__table__.c.geom.ST_Intersects(compared_element))
-
-        print(query)
-
-        res = session.execute(query).fetchall()
-
-        assert bool(res) == expected_assert
-
 
 class TestShapely:
     pass

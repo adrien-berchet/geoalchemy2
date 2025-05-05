@@ -4,6 +4,7 @@ from sqlalchemy.ext.compiler import compiles
 
 from geoalchemy2 import functions
 from geoalchemy2.admin.dialects.common import compile_bin_literal
+from geoalchemy2.admin.dialects.common import before_cursor_execute
 from geoalchemy2.admin.dialects.mysql import after_create  # noqa
 from geoalchemy2.admin.dialects.mysql import after_drop  # noqa
 from geoalchemy2.admin.dialects.mysql import before_create  # noqa
@@ -13,32 +14,32 @@ from geoalchemy2.elements import WKBElement
 from geoalchemy2.elements import WKTElement
 
 
-def _cast(param):
-    if isinstance(param, memoryview):
-        param = param.tobytes()
-    if isinstance(param, bytes):
-        param = WKBElement(param)
-    if isinstance(param, WKBElement):
-        param = param.as_wkb().desc
-    return param
+# def _cast(param):
+#     if isinstance(param, memoryview):
+#         param = param.tobytes()
+#     if isinstance(param, bytes):
+#         param = WKBElement(param)
+#     if isinstance(param, WKBElement):
+#         param = param.as_wkb().desc
+#     return param
 
 
-def before_cursor_execute(
-    conn, cursor, statement, parameters, context, executemany, convert=True
-):  # noqa: D417
-    """Event handler to cast the parameters properly.
+# def before_cursor_execute(
+#     conn, cursor, statement, parameters, context, executemany, convert=True
+# ):  # noqa: D417
+#     """Event handler to cast the parameters properly.
 
-    Args:
-        convert (bool): Trigger the conversion.
-    """
-    if convert:
-        if isinstance(parameters, (tuple, list)):
-            parameters = tuple(_cast(x) for x in parameters)
-        elif isinstance(parameters, dict):
-            for k in parameters:
-                parameters[k] = _cast(parameters[k])
+#     Args:
+#         convert (bool): Trigger the conversion.
+#     """
+#     if convert:
+#         if isinstance(parameters, (tuple, list)):
+#             parameters = tuple(_cast(x) for x in parameters)
+#         elif isinstance(parameters, dict):
+#             for k in parameters:
+#                 parameters[k] = _cast(parameters[k])
 
-    return statement, parameters
+#     return statement, parameters
 
 
 _MARIADB_FUNCTIONS = {

@@ -55,9 +55,9 @@ def test_transform_core():
     # Check the query
     assert str(wrong_query) == (
         "SELECT "
-        "ST_AsEWKB("
+        "ST_AsBinary("
         'ST_Transform(raster_table.geom, :ST_Transform_2)) AS "ST_Transform_1", '
-        "ST_AsEWKB("  # <= Note that the raster is processed as a Geometry here
+        "ST_AsBinary("  # <= Note that the raster is processed as a Geometry here
         'ST_Transform(raster_table.rast, :ST_Transform_4)) AS "ST_Transform_3" \n'
         "FROM raster_table"
     )
@@ -73,7 +73,7 @@ def test_transform_core():
     # Check the query
     assert str(correct_query) == (
         "SELECT "
-        "ST_AsEWKB("
+        "ST_AsBinary("
         'ST_Transform(raster_table.geom, :ST_Transform_2)) AS "ST_Transform_1", '
         "raster("  # <= This time the raster is correctly processed as a Raster
         'ST_Transform(raster_table.rast, :ST_Transform_4)) AS "ST_Transform_3" \n'
@@ -88,9 +88,9 @@ def test_transform_ORM():
     # Check the query
     assert str(wrong_query) == (
         "SELECT "
-        "ST_AsEWKB("
+        "ST_AsBinary("
         'ST_Transform(raster_table_orm.geom, :ST_Transform_2)) AS "ST_Transform_1", '
-        "ST_AsEWKB("  # <= Note that the raster is processed as a Geometry here
+        "ST_AsBinary("  # <= Note that the raster is processed as a Geometry here
         'ST_Transform(raster_table_orm.rast, :ST_Transform_4)) AS "ST_Transform_3" \n'
         "FROM raster_table_orm"
     )
@@ -106,7 +106,7 @@ def test_transform_ORM():
     # Check the query
     assert str(correct_query) == (
         "SELECT "
-        "ST_AsEWKB("
+        "ST_AsBinary("
         'ST_Transform(raster_table_orm.geom, :ST_Transform_2)) AS "ST_Transform_1", '
         "raster("  # <= This time the raster is correctly processed as a Raster
         'ST_Transform(raster_table_orm.rast, :ST_Transform_4)) AS "ST_Transform_3" \n'
