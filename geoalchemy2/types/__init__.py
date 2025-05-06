@@ -231,25 +231,29 @@ class _GISType(UserDefinedType):
         def process(bindvalue):
             print("####################################### bind_processor", str(bindvalue))
 
-            if input_type == "wkt":
+            if self.representation == "wkt":
                 # Use the WKTElement to convert the value to a WKT string
                 if isinstance(bindvalue, str):
                     bindvalue = WKTElement(bindvalue)
                 if isinstance(bindvalue, WKTElement):
-                    if extended_input:
-                        if bindvalue.srid is not None and bindvalue.srid != self.srid:
-                            bindvalue = bindvalue.as_wkt()
-                        bindvalue = bindvalue.as_ewkt()
+                    if self.extended:
+                        bindvalue = bindvalue.as_wkt()
+                        # if bindvalue.srid is not None and bindvalue.srid != self.srid:
+                        #     bindvalue = bindvalue.as_wkt()
+                        # bindvalue = bindvalue.as_ewkt()
                     return bindvalue.data
                 elif isinstance(bindvalue, WKBElement):
+                    if self.extended:
+                        bindvalue = bindvalue.as_wkb()
                     shape_element = to_shape(bindvalue)
-                    if extended_input:
-                        bindvalue = bindvalue.as_ewkb()
-                    else:
-                        bindvalue = bindvalue.wkt
-                    return bindvalue.data
+                    # if self.extended:
+                    #     # bindvalue = bindvalue.as_ewkb()
+                    #     bindvalue = bindvalue.as_wkb().wkt
+                    # else:
+                    #     bindvalue = bindvalue.wkt
+                    return shape_element.wkt
 
-            elif input_type == "wkb":
+            elif self.representation == "wkb":
                 if isinstance(bindvalue, str | bytes | memoryview):
                     try:
                         # If the string is a valid WKB, we try to parse it as such.
