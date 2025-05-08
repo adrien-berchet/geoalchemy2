@@ -173,29 +173,41 @@ def after_drop(table, bind, **kw):
         table.columns = saved_cols
 
 
-def _compile_GeomFromWKB_Postgresql(element, compiler, **kw):
+def _compile_GeomFromWKB_Postgresql(element, compiler, extended=False, **kw):
     # Store the SRID
-    clauses = list(element.clauses)
-    try:
-        srid = clauses[1].value
-    except (IndexError, TypeError, ValueError):
-        srid = element.type.srid
 
     if kw.get("literal_binds", False):
+        clauses = list(element.clauses)
+        try:
+            srid = clauses[1].value
+        except (IndexError, TypeError, ValueError):
+            srid = element.type.srid
         wkb_clause = compile_bin_literal(clauses[0])
         prefix = "decode("
         suffix = ", 'hex')"
-    else:
-        wkb_clause = clauses[0]
-        prefix = ""
-        suffix = ""
 
-    compiled = compiler.process(wkb_clause, **kw)
+        compiled = compiler.process(wkb_clause, **kw)
+        if not extended and srid > 0:
+            return "{}({}{}{}, {})".format(element.identifier, prefix, compiled, suffix, srid)
+        else:
+            return "{}({}{}{})".format(element.identifier, prefix, compiled, suffix)
+    # else:
+    #     wkb_clause = clauses[0]
+    #     prefix = ""
+    #     suffix = ""
 
-    if srid > 0:
-        return "{}({}{}{}, {})".format(element.identifier, prefix, compiled, suffix, srid)
-    else:
-        return "{}({}{}{})".format(element.identifier, prefix, compiled, suffix)
+    # ##################### #
+    # import pdb
+    # pdb.set_trace()
+    # ##################### #
+
+    return "{}({})".format(element.identifier, compiler.process(element.clauses, **kw))
+    # compiled = compiler.process(wkb_clause, **kw)
+
+    # if not extended and srid > 0:
+    #     return "{}({}{}{}, {})".format(element.identifier, prefix, compiled, suffix, srid)
+    # else:
+    #     return "{}({}{}{})".format(element.identifier, prefix, compiled, suffix)
 
 
 @compiles(functions.ST_GeomFromWKB, "postgresql")  # type: ignore
@@ -205,4 +217,4 @@ def _PostgreSQL_ST_GeomFromWKB(element, compiler, **kw):
 
 @compiles(functions.ST_GeomFromEWKB, "postgresql")  # type: ignore
 def _PostgreSQL_ST_GeomFromEWKB(element, compiler, **kw):
-    return _compile_GeomFromWKB_Postgresql(element, compiler, **kw)
+    return _compile_GeomFromWKB_Postgresql(element, compiler, extended=True, **kw)
