@@ -147,7 +147,8 @@ class WKTElement(_SpatialElement):
                 raise ArgumentError("invalid EWKT string {}".format(data))
             header = data_s[0]
             try:
-                srid = int(header[5:].rstrip())
+                # srid = int(header[5:].rstrip())
+                srid = int(header[5:])
             except ValueError:
                 raise ArgumentError("invalid EWKT string {}".format(data))
         _SpatialElement.__init__(self, data, srid, extended)
@@ -273,6 +274,7 @@ class WKBElement(_SpatialElement):
 
     def as_wkb(self) -> WKBElement:
         if self.extended:
+            print("as_wkb")
             if isinstance(self.data, str):
                 # SpatiaLite case
                 # assume that the string is an hex value
@@ -301,7 +303,7 @@ class WKBElement(_SpatialElement):
                 buffer.extend(self.data[9:])
                 data = memoryview(buffer)
             return WKBElement(data, self.srid, extended=False)
-        return WKBElement(self.data, self.srid)
+        return self
 
     def as_ewkb(self) -> WKBElement:
         if not self.extended and self.srid != -1:
@@ -341,7 +343,7 @@ class WKBElement(_SpatialElement):
                 data = memoryview(buffer)
 
             return WKBElement(data, self.srid, extended=True)
-        return WKBElement(self.data, self.srid)
+        return self
 
 
 class DynamicWKBElement(WKBElement):

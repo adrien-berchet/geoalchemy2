@@ -163,6 +163,7 @@ class _GISType(UserDefinedType):
         self.nullable = nullable
         self._spatial_index_reflected = _spatial_index_reflected
 
+        input_type = self.from_text[-4:].lower()
         if representation is not None:
             self.representation = representation.lower()
             if self.representation not in ["wkb", "wkt"]:
@@ -171,24 +172,47 @@ class _GISType(UserDefinedType):
                     "but got %s" % self.representation
                 )
         else:
-            input_type = self.from_text[-4:].lower()
             if input_type[-1] == "t" or input_type == "text":
                 self.representation = "wkt"
             elif input_type[-1] == "b":
                 self.representation = "wkb"
+        if input_type[-4] != "e":
+            self.input_extended = False
+        else:
+            self.input_extended = True
 
         output_type = self.to_text[-4:].lower()
-        if output_type[-4] != "e":
-            self.extended = False
+        if output_type[-4:-2] != "ew":
+            self.output_extended = False
         else:
-            self.extended = True
-        # self.extended: bool = "ewkb" in self.to_text.lower()
+            self.output_extended = True
 
         if not hasattr(self, "ElementType"):
             self.ElementType = {
                 "wkb": WKBElement,
                 "wkt": WKTElement,
             }[self.representation]
+
+        if representation == "wkb":
+            self.ElementType = WKBElement
+        else:
+            self.ElementType = WKTElement
+
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: representation", self.representation)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: input_extended", self.input_extended)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: output_extended", self.output_extended)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: from_text", self.from_text)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: to_text", self.to_text)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: as_binary", self.as_binary)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: geometry_type", self.geometry_type)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: srid", self.srid)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: dimension", self.dimension)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: spatial_index", self.spatial_index)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: use_N_D_index", self.use_N_D_index)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: use_typmod", self.use_typmod)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: nullable", self.nullable)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: name", self.name)
+        print("$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$$ _GISType __init__: _spatial_index_reflected", self._spatial_index_reflected)
 
     def get_col_spec(self):
         if not self.geometry_type:
@@ -207,8 +231,8 @@ class _GISType(UserDefinedType):
                 kwargs = {}
                 if self.srid > 0:
                     kwargs["srid"] = self.srid
-                if self.extended is not None:
-                    kwargs["extended"] = self.extended
+                if self.output_extended is not None:
+                    kwargs["extended"] = self.output_extended
                 return self.ElementType(value, **kwargs)
 
         return process
@@ -223,56 +247,86 @@ class _GISType(UserDefinedType):
         WKB or WKT string here so that the database can use it directly. It would probably make
         other functions simpler.
         """
-        return getattr(func, self.from_text)(bindvalue, self.srid, type_=self)
+        if not self.input_extended and self.srid is not None and self.srid > 0:
+            return getattr(func, self.from_text)(bindvalue, self.srid, type_=self)
+        else:
+            return getattr(func, self.from_text)(bindvalue, type_=self)
 
     def bind_processor(self, dialect):
         """Specific bind_processor that automatically process spatial elements."""
 
         def process(bindvalue):
-            print("####################################### bind_processor", str(bindvalue))
+
+            # ##################### #
+            # import pdb
+            # pdb.set_trace()
+            # ##################### #
+
+            # print("####################################### bind_processor", str(bindvalue))
 
             if self.representation == "wkt":
+                print("####################################### bind_processor wkt")
                 # Use the WKTElement to convert the value to a WKT string
                 if isinstance(bindvalue, str):
-                    bindvalue = WKTElement(bindvalue)
+                    print("####################################### bind_processor convert string to WKTElement")
+                    try:
+                        bindvalue = WKTElement(bindvalue)
+                    except Exception:
+                        # If the string is not a valid WKT, we assume it is a WKB
+                        # and try to parse it as such.
+                        print("####################################### bind_processor COULD NOT convert string to WKTElement so parse the string as WKB")
+                        wkb_element = WKBElement(bindvalue)
+                        shape_element = to_shape(wkb_element)
+                        srid = wkt_element.srid or -1
+                        bindvalue = from_shape(shape_element, srid=srid if srid > 0 else None)
                 if isinstance(bindvalue, WKTElement):
-                    if self.extended:
+                    if not self.input_extended:
+                        print("####################################### bind_processor convert to wkt")
                         bindvalue = bindvalue.as_wkt()
                         # if bindvalue.srid is not None and bindvalue.srid != self.srid:
                         #     bindvalue = bindvalue.as_wkt()
                         # bindvalue = bindvalue.as_ewkt()
                     return bindvalue.data
                 elif isinstance(bindvalue, WKBElement):
-                    if self.extended:
+                    if not self.input_extended:
+                        print("####################################### bind_processor convert to wkb")
                         bindvalue = bindvalue.as_wkb()
+                    print("####################################### bind_processor convert to shape")
                     shape_element = to_shape(bindvalue)
                     # if self.extended:
                     #     # bindvalue = bindvalue.as_ewkb()
                     #     bindvalue = bindvalue.as_wkb().wkt
                     # else:
                     #     bindvalue = bindvalue.wkt
+                    print("####################################### bind_processor convert to wkt string")
                     return shape_element.wkt
 
             elif self.representation == "wkb":
+                print("####################################### bind_processor wkb")
                 if isinstance(bindvalue, str | bytes | memoryview):
                     try:
                         # If the string is a valid WKB, we try to parse it as such.
-                        return WKBElement(bindvalue).as_wkb().data
+                        print("####################################### bind_processor convert string to WKBElement")
+                        bindvalue = WKBElement(bindvalue)
                     except Exception:
                         # If the string is not a valid WKB, we assume it is a WKT
                         # and try to parse it as such.
                         wkt_element = WKTElement(bindvalue)
                         shape_element = to_shape(wkt_element)
                         srid = wkt_element.srid or -1
+                        print("####################################### bind_processor COULD NOT convert string to WKBElement so parse the string as WKT")
                         bindvalue = from_shape(shape_element, srid=srid if srid > 0 else None)
                 elif isinstance(bindvalue, WKTElement):
+                    print("####################################### bind_processor convert WKTElement to WKBElement")
                     bindvalue = bindvalue.as_wkt()
                     shape_element = to_shape(bindvalue)
                     srid = bindvalue.srid or -1
                     bindvalue = from_shape(shape_element, srid=srid if srid > 0 else None)
 
                 if isinstance(bindvalue, WKBElement):
-                    bindvalue = bindvalue.as_wkb().data
+                    if not self.input_extended:
+                        bindvalue = bindvalue.as_wkb()
+                    return bindvalue.data
 
             return bindvalue
 

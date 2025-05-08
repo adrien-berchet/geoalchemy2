@@ -4,7 +4,7 @@ from sqlalchemy.ext.compiler import compiles
 
 from geoalchemy2 import functions
 from geoalchemy2.admin.dialects.common import compile_bin_literal
-from geoalchemy2.admin.dialects.common import before_cursor_execute
+# from geoalchemy2.admin.dialects.common import before_cursor_execute
 from geoalchemy2.admin.dialects.mysql import after_create  # noqa
 from geoalchemy2.admin.dialects.mysql import after_drop  # noqa
 from geoalchemy2.admin.dialects.mysql import before_create  # noqa
