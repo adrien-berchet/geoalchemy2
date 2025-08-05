@@ -29,6 +29,11 @@ def pytest_addoption(parser):
         help="PostgreSQL DB URL used for tests (`postgresql://user:password@host:port/dbname`).",
     )
     parser.addoption(
+        "--cockroachdb_dburl",
+        action="store",
+        help="CockroachDB DB URL used for tests (`cockroachdb://user:password@host:port/dbname`).",
+    )
+    parser.addoption(
         "--sqlite_spatialite3_dburl",
         action="store",
         help="SQLite DB URL used for tests with SpatiaLite3 (`sqlite:///path_to_db_file`).",
@@ -107,7 +112,7 @@ def pytest_generate_tests(metafunc):
         dialects = None
 
         if metafunc.module.__name__ == "tests.test_functional_postgresql":
-            dialects = ["postgresql"]
+            dialects = ["postgresql", "cockroachdb"]
         elif metafunc.module.__name__ == "tests.test_functional_sqlite":
             dialects = sqlite_dialects
         elif metafunc.module.__name__ == "tests.test_functional_mysql":
@@ -123,7 +128,7 @@ def pytest_generate_tests(metafunc):
             dialects = metafunc.cls.tested_dialects
 
         if dialects is None:
-            dialects = ["mysql", "mariadb", "mssql", "postgresql"] + sqlite_dialects
+            dialects = ["mysql", "mariadb", "mssql", "postgresql", "cockroachdb"] + sqlite_dialects
 
         if "sqlite" in dialects:
             # Order dialects
@@ -160,6 +165,15 @@ def db_url_postgresql(request):
         request.config.getoption("--postgresql_dburl")
         or os.getenv("PYTEST_POSTGRESQL_DB_URL")
         or "postgresql://gis:gis@localhost/gis"
+    )
+
+
+@pytest.fixture(scope="session")
+def db_url_cockroachdb(request):
+    return (
+        request.config.getoption("--cockroachdb_dburl")
+        or os.getenv("PYTEST_COCKROACHDB_DB_URL")
+        or "cockroachdb://gis:gis@localhost/gis"
     )
 
 
@@ -221,6 +235,7 @@ def db_url_geopackage(request, tmpdir_factory):
 def db_url(
     request,
     db_url_postgresql,
+    db_url_cockroachdb,
     db_url_sqlite_spatialite3,
     db_url_sqlite_spatialite4,
     db_url_geopackage,
@@ -230,6 +245,8 @@ def db_url(
 ):
     if request.param == "postgresql":
         return db_url_postgresql
+    if request.param == "cockroachdb":
+        return db_url_cockroachdb
     if request.param == "mysql":
         return db_url_mysql
     if request.param == "mariadb":
@@ -364,7 +381,7 @@ def session(engine, conn):
 
 @pytest.fixture
 def schema(engine):
-    if engine.dialect.name == "postgresql":
+    if engine.dialect.name in ["postgresql", "cockroachdb"]:
         return "gis"
     else:
         return None
