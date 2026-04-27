@@ -14,6 +14,8 @@ GeoAlchemy 2 also supports the following dialects:
   helpers that require SpatiaLite >= 5)
 * `MySQL <https://dev.mysql.com/doc/refman/8.0/en/spatial-types.html>`_ >= 8
 * `MariaDB <https://mariadb.com/kb/en/gis-features-in-533/>`_ >= 5.3.3 (experimental)
+* `CockroachDB <https://www.cockroachlabs.com/docs/stable/spatial-data-overview>`_ with
+  ``sqlalchemy-cockroachdb`` (experimental)
 * `GeoPackage <http://www.geopackage.org/spec/>`_
 * `MSSQL <https://docs.microsoft.com/en-us/sql/relational-databases/spatial/spatial-data-sql-server?view=sql-server-ver16>`_ tested with SQL Server 2022 CU24 (experimental)
 

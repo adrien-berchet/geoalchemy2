@@ -40,6 +40,19 @@ writer = rewriter.Rewriter()
 _SPATIAL_TABLES = set()
 
 
+def _is_postgresql_based(dialect):
+    return dialect.name in ["postgresql", "cockroachdb"]
+
+
+def _validate_cockroachdb_column(column, dialect):
+    if dialect.name != "cockroachdb":
+        return
+
+    from geoalchemy2.admin.dialects.cockroachdb import validate_column
+
+    validate_column(column, dialect)
+
+
 class GeoPackageImpl(SQLiteImpl):
     """Class to copy the Alembic implementation from SQLite to GeoPackage."""
 
@@ -367,7 +380,8 @@ def add_geospatial_column(operations, operation):
                 not geospatial_core_type.nullable,
             )
         )
-    elif "postgresql" in dialect.name:
+    elif _is_postgresql_based(dialect):
+        _validate_cockroachdb_column(operation.column, dialect)
         operations.impl.add_column(
             table_name,
             operation.column,
@@ -930,6 +944,8 @@ def create_geospatial_index(operations, operation):
         )
     else:
         idx = operation.to_index(operations.migration_context)
+        for col in idx.columns:
+            _validate_cockroachdb_column(col, dialect)
         operations.impl.create_index(idx)
 
 
@@ -991,6 +1007,8 @@ def create_geo_index(context, revision, op):
         if isinstance(col, Column) and _check_spatial_type(
             col.type, (Geometry, Geography, Raster), dialect
         ):
+            _validate_cockroachdb_column(col, dialect)
+
             # Fix index properties
             op.kw["postgresql_using"] = op.kw.get("postgresql_using", "gist")
             postgresql_ops = {col.name: "gist_geometry_ops_nd"} if col.type.use_N_D_index else {}

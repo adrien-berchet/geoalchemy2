@@ -86,6 +86,9 @@ Install the Python dependencies::
     $ pip install -r requirements.txt -r requirements-mypy.txt
     $ pip install psycopg2-binary pyodbc "Shapely>=1.3.0"
 
+Install ``sqlalchemy-cockroachdb`` as well if you want to run the CockroachDB tests directly on
+the host. Use a release below 2.0 when testing with SQLAlchemy 1.4.
+
 The tox environments also install these full-suite dependencies from ``tox.ini``:
 ``psycopg2-binary`` and ``pyodbc`` on CPython, ``psycopg2cffi`` on PyPy, and
 ``Shapely`` for shape conversion tests.

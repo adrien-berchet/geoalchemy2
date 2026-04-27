@@ -43,7 +43,7 @@ def select_dialect(dialect_name):
         "mariadb": dialects.mariadb,
         "mssql": dialects.mssql,
         "postgresql": dialects.postgresql,
-        "cockroachdb": dialects.postgresql,  # Cockroachdb is postgis-compatible
+        "cockroachdb": dialects.cockroachdb,
         "sqlite": dialects.sqlite,
     }
     return known_dialects.get(dialect_name, dialects.common)

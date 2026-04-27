@@ -25,6 +25,14 @@ PostgreSQL-specific objects
    :private-members:
    :show-inheritance:
 
+CockroachDB-specific objects
+----------------------------
+
+.. automodule:: geoalchemy2.admin.dialects.cockroachdb
+   :members:
+   :private-members:
+   :show-inheritance:
+
 MySQL/MariaDB-specific objects
 ------------------------------
 
