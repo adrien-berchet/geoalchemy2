@@ -1,6 +1,7 @@
 """This module defines some dialect-specific functions used for administration tasks."""
 
 from geoalchemy2.admin.dialects import common  # noqa
+from geoalchemy2.admin.dialects import cockroachdb  # noqa
 from geoalchemy2.admin.dialects import geopackage  # noqa
 from geoalchemy2.admin.dialects import mariadb  # noqa
 from geoalchemy2.admin.dialects import mssql  # noqa

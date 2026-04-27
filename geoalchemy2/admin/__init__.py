@@ -19,12 +19,12 @@ from geoalchemy2.types import Raster
 def select_dialect(dialect_name):
     """Select the dialect from its name."""
     known_dialects = {
+        "cockroachdb": dialects.cockroachdb,
         "geopackage": dialects.geopackage,
         "mysql": dialects.mysql,
         "mariadb": dialects.mariadb,
         "mssql": dialects.mssql,
         "postgresql": dialects.postgresql,
-        "cockroachdb": dialects.postgresql,
         "sqlite": dialects.sqlite,
     }
     return known_dialects.get(dialect_name, dialects.common)
