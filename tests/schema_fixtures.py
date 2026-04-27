@@ -37,7 +37,7 @@ def Poi(base, schema, dialect_name):
         geom = Column(Geometry(geometry_type="POINT", srid=4326))
         geog = (
             Column(Geography(geometry_type="POINT", srid=4326))
-            if dialect_name == "postgresql"
+            if dialect_name in ["postgresql", "cockroachdb"]
             else None
         )
 

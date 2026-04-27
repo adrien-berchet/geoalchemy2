@@ -87,7 +87,10 @@ Install the Python dependencies::
     $ pip install psycopg2-binary pyodbc "Shapely>=1.3.0"
 
 Install ``sqlalchemy-cockroachdb`` as well if you want to run the CockroachDB tests directly on
-the host. Use a release below 2.0 when testing with SQLAlchemy 1.4.
+the host. Use a release below 2.0 when testing with SQLAlchemy 1.4. Create and grant access to a
+``gis`` schema in the CockroachDB test database, and enable
+``sql.spatial.experimental_box2d_comparison_operators.enabled`` before running the PostgreSQL
+functional tests against CockroachDB.
 
 The tox environments also install these full-suite dependencies from ``tox.ini``:
 ``psycopg2-binary`` and ``pyodbc`` on CPython, ``psycopg2cffi`` on PyPy, and
