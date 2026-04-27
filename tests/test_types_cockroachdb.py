@@ -168,15 +168,70 @@ def test_geom_from_wkb_literal_compile():
     )
 
 
+def test_geom_from_ewkb_literal_compile_omits_srid():
+    ewkb = bytes.fromhex("0101000020e6100000000000000000f03f0000000000000040")
+    expr = func.ST_GeomFromEWKB(ewkb, type_=Geometry(srid=4326))
+
+    compiled = normalize_sql(
+        expr.compile(dialect=CockroachDBDialect(), compile_kwargs={"literal_binds": True})
+    )
+
+    assert (
+        compiled
+        == "ST_GeomFromEWKB(decode('0101000020e6100000000000000000f03f0000000000000040', 'hex'))"
+    )
+
+
+def test_geom_from_ewkb_compile_omits_srid_parameter():
+    expr = func.ST_GeomFromEWKB(
+        bytes.fromhex("0101000020e6100000000000000000f03f0000000000000040"),
+        type_=Geometry(srid=4326),
+    )
+
+    compiled = normalize_sql(expr.compile(dialect=CockroachDBDialect()))
+
+    assert compiled == "ST_GeomFromEWKB(%(ST_GeomFromEWKB_1)s)"
+
+
 @pytest.mark.parametrize(
-    "wkb",
+    ("spatial_type", "wkb"),
     [
-        WKBElement("0101000000000000000000f03f0000000000000040", srid=4326),
-        WKBElement("0101000020e6100000000000000000f03f0000000000000040", extended=True),
+        (
+            Geometry(srid=4326),
+            bytes.fromhex("0101000000000000000000f03f0000000000000040"),
+        ),
+        (
+            Geometry(srid=4326),
+            memoryview(bytes.fromhex("0101000000000000000000f03f0000000000000040")),
+        ),
+        (
+            Geometry(),
+            WKBElement("0101000000000000000000f03f0000000000000040", srid=4326),
+        ),
+        (
+            Geometry(),
+            WKBElement("0101000020e6100000000000000000f03f0000000000000040", extended=True),
+        ),
     ],
 )
-def test_bind_processor_converts_wkb_to_ewkt(wkb):
-    assert cockroachdb_type.bind_processor_process(Geometry(), wkb) == "SRID=4326;POINT (1 2)"
+def test_bind_processor_converts_wkb_to_ewkt(spatial_type, wkb):
+    assert cockroachdb_type.bind_processor_process(spatial_type, wkb) == "SRID=4326;POINT (1 2)"
+
+
+@pytest.mark.parametrize(
+    "bindvalue",
+    [
+        bytes.fromhex("0101000000000000000000f03f0000000000000040"),
+        memoryview(bytes.fromhex("0101000000000000000000f03f0000000000000040")),
+        WKBElement(bytes.fromhex("0101000000000000000000f03f0000000000000040")),
+        WKBElement("0101000000000000000000f03f0000000000000040"),
+    ],
+)
+def test_bind_processor_preserves_wkb_for_wkb_constructor(bindvalue):
+    wkb = bytes.fromhex("0101000000000000000000f03f0000000000000040")
+    spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+    assert cockroachdb_type.bind_processor_process(spatial_type, bindvalue) == wkb
 
 
 @pytest.mark.parametrize(

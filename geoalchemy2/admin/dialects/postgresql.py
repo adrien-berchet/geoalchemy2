@@ -216,6 +216,5 @@ def _PostgreSQL_ST_GeomFromWKB(element, compiler, **kw):
 
 
 @compiles(functions.ST_GeomFromEWKB, "postgresql")  # type: ignore
-@compiles(functions.ST_GeomFromEWKB, "cockroachdb")  # type: ignore
 def _PostgreSQL_ST_GeomFromEWKB(element, compiler, **kw):
     return _compile_GeomFromWKB_Postgresql(element, compiler, **kw)

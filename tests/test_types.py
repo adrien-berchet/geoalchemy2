@@ -8,10 +8,13 @@ from sqlalchemy.sql import func
 from sqlalchemy.sql import insert
 from sqlalchemy.sql import text
 
+from geoalchemy2.admin.dialects.geopackage import GeoPackageDialect
+from geoalchemy2.elements import WKBElement
 from geoalchemy2.exc import ArgumentError
 from geoalchemy2.types import Geography
 from geoalchemy2.types import Geometry
 from geoalchemy2.types import Raster
+from geoalchemy2.types.dialects import geopackage as geopackage_type
 
 from . import select
 
@@ -218,6 +221,77 @@ class TestGeometryCollection:
     def test_get_col_spec(self):
         g = Geometry(geometry_type="GEOMETRYCOLLECTION", srid=900913)
         assert g.get_col_spec() == "geometry(GEOMETRYCOLLECTION,900913)"
+
+
+class TestGeoPackage:
+    WKB_HEX = "0101000000000000000000f03f0000000000000040"
+    EWKB_HEX = "0101000020e6100000000000000000f03f0000000000000040"
+
+    def normalize_sql(self, sql):
+        return re.sub(r"\s+", " ", str(sql)).strip()
+
+    def test_geom_from_wkb_literal_compile_keeps_srid(self):
+        wkb = bytes.fromhex(self.WKB_HEX)
+        expr = func.ST_GeomFromWKB(wkb, 4326)
+
+        compiled = self.normalize_sql(
+            expr.compile(dialect=GeoPackageDialect(), compile_kwargs={"literal_binds": True})
+        )
+
+        assert compiled == f"GeomFromWKB(unhex('{self.WKB_HEX}'), 4326)"
+
+    def test_geom_from_ewkb_literal_compile_omits_srid(self):
+        ewkb = bytes.fromhex(self.EWKB_HEX)
+        expr = func.ST_GeomFromEWKB(ewkb, type_=Geometry(srid=4326))
+
+        compiled = self.normalize_sql(
+            expr.compile(dialect=GeoPackageDialect(), compile_kwargs={"literal_binds": True})
+        )
+
+        assert compiled == f"GeomFromEWKB(unhex('{self.EWKB_HEX}'))"
+
+    def test_geom_from_ewkb_compile_omits_srid_parameter(self):
+        ewkb = bytes.fromhex(self.EWKB_HEX)
+        expr = func.ST_GeomFromEWKB(ewkb, type_=Geometry(srid=4326))
+
+        compiled = self.normalize_sql(expr.compile(dialect=GeoPackageDialect()))
+
+        assert compiled == "GeomFromEWKB(?)"
+
+    @pytest.mark.parametrize(
+        "bindvalue",
+        [
+            bytes.fromhex(WKB_HEX),
+            memoryview(bytes.fromhex(WKB_HEX)),
+            WKB_HEX,
+            WKBElement(bytes.fromhex(WKB_HEX)),
+            WKBElement(WKB_HEX),
+        ],
+    )
+    def test_bind_processor_preserves_wkb_for_wkb_constructor(self, bindvalue):
+        wkb = bytes.fromhex(self.WKB_HEX)
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+        assert geopackage_type.bind_processor_process(spatial_type, bindvalue) == wkb
+
+    @pytest.mark.parametrize(
+        "bindvalue",
+        [
+            bytes.fromhex(EWKB_HEX),
+            memoryview(bytes.fromhex(EWKB_HEX)),
+            EWKB_HEX,
+            WKBElement(
+                bytes.fromhex(EWKB_HEX),
+                extended=True,
+            ),
+            WKBElement(EWKB_HEX, extended=True),
+        ],
+    )
+    def test_bind_processor_preserves_ewkb_for_ewkb_constructor(self, bindvalue):
+        ewkb = bytes.fromhex(self.EWKB_HEX)
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromEWKB")
+
+        assert geopackage_type.bind_processor_process(spatial_type, bindvalue) == ewkb
 
 
 class TestRaster:

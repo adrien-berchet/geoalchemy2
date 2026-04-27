@@ -6,10 +6,13 @@ import warnings
 from sqlalchemy import text
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.sqltypes import NullType
 from sqlalchemy.types import TypeDecorator
 
+from geoalchemy2 import functions
 from geoalchemy2.admin.dialects import postgresql
+from geoalchemy2.admin.dialects.common import compile_bin_literal
 from geoalchemy2.exc import ArgumentError
 from geoalchemy2.types import Geography
 from geoalchemy2.types import Geometry
@@ -105,6 +108,22 @@ def _register_cockroachdb_types():
 
 
 _register_cockroachdb_types()
+
+
+@compiles(functions.ST_GeomFromEWKB, "cockroachdb")  # type: ignore
+def _CockroachDB_ST_GeomFromEWKB(element, compiler, **kw):
+    clauses = list(element.clauses)
+    if kw.get("literal_binds", False):
+        wkb_clause = compile_bin_literal(clauses[0])
+        prefix = "decode("
+        suffix = ", 'hex')"
+    else:
+        wkb_clause = clauses[0]
+        prefix = ""
+        suffix = ""
+
+    compiled = compiler.process(wkb_clause, **kw)
+    return f"{element.identifier}({prefix}{compiled}{suffix})"
 
 
 def _resolve_spatial_type(column_type, dialect):
