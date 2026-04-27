@@ -26,7 +26,10 @@ psql \
     "${target_root_db_url}" \
     -v user_name="${COCKROACH_USER}" \
     -v ON_ERROR_STOP=1 <<'SQL'
+SET CLUSTER SETTING sql.spatial.experimental_box2d_comparison_operators.enabled = on;
+CREATE SCHEMA IF NOT EXISTS gis;
 GRANT ALL ON SCHEMA public TO :"user_name";
+GRANT ALL ON SCHEMA gis TO :"user_name";
 SQL
 
 echo "Waiting for CockroachDB user '${COCKROACH_USER}' to connect to '${COCKROACH_DATABASE}'"

@@ -11,6 +11,7 @@ from sqlalchemy.orm import declarative_base
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import NullPool
 
+from geoalchemy2.alembic_helpers import _monkey_patch_get_indexes_for_cockroachdb
 from geoalchemy2.alembic_helpers import _monkey_patch_get_indexes_for_mysql
 from geoalchemy2.alembic_helpers import _monkey_patch_get_indexes_for_sqlite
 
@@ -421,10 +422,20 @@ def reset_alembic_monkeypatch():
     except AttributeError:
         pass
 
+    try:
+        from sqlalchemy_cockroachdb.base import CockroachDBDialect  # type: ignore[import-untyped]
+
+        normal_behavior_cockroachdb = CockroachDBDialect._geoalchemy2_get_indexes_normal_behavior
+        CockroachDBDialect.get_indexes = normal_behavior_cockroachdb
+        del CockroachDBDialect._geoalchemy2_get_indexes_normal_behavior
+    except (AttributeError, ImportError):
+        pass
+
 
 @pytest.fixture()
 def use_alembic_monkeypatch():
     """Enable Alembic monkeypatching ."""
+    _monkey_patch_get_indexes_for_cockroachdb()
     _monkey_patch_get_indexes_for_sqlite()
     _monkey_patch_get_indexes_for_mysql()
 

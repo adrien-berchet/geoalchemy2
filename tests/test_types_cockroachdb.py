@@ -19,6 +19,8 @@ from geoalchemy2 import Raster
 from geoalchemy2 import alembic_helpers
 from geoalchemy2.admin import select_dialect as select_admin_dialect
 from geoalchemy2.admin.dialects import cockroachdb as cockroachdb_admin
+from geoalchemy2.elements import WKBElement
+from geoalchemy2.elements import WKTElement
 from geoalchemy2.exc import ArgumentError
 from geoalchemy2.types import select_dialect as select_type_dialect
 from geoalchemy2.types.dialects import cockroachdb as cockroachdb_type
@@ -56,6 +58,64 @@ def test_cockroachdb_registers_external_type_map(monkeypatch):
 
     assert base._type_map["geometry"] is Geometry
     assert base._type_map["geography"] is Geography
+
+
+def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
+    package = types.ModuleType("sqlalchemy_cockroachdb")
+    base = types.ModuleType("sqlalchemy_cockroachdb.base")
+
+    class ExternalCockroachDBDialect:
+        default_schema_name = "public"
+
+        def get_indexes(self, connection, table_name, schema=None, **kw):
+            return [
+                {
+                    "name": "idx_lake_geom",
+                    "column_names": ["geom"],
+                    "column_sorting": {"geom": ("nulls_first",)},
+                    "dialect_options": {
+                        "postgresql_ops": {"geom": None},
+                        "postgresql_using": "inverted",
+                    },
+                    "unique": False,
+                },
+                {
+                    "name": "idx_lake_id",
+                    "column_names": ["id"],
+                    "column_sorting": {"id": ("nulls_first",)},
+                    "unique": False,
+                },
+            ]
+
+    class Connection:
+        def execute(self, statement, params):
+            assert params == {"schema": "public", "table_name": "lake"}
+            return [
+                ("geom", "geometry(LINESTRING,4326)"),
+                ("id", "INT8"),
+            ]
+
+    base.CockroachDBDialect = ExternalCockroachDBDialect
+    package.base = base
+    monkeypatch.setitem(sys.modules, "sqlalchemy_cockroachdb", package)
+    monkeypatch.setitem(sys.modules, "sqlalchemy_cockroachdb.base", base)
+
+    alembic_helpers._monkey_patch_get_indexes_for_cockroachdb()
+
+    indexes = ExternalCockroachDBDialect().get_indexes(Connection(), "lake")
+
+    assert indexes[0] == {
+        "name": "idx_lake_geom",
+        "column_names": ["geom"],
+        "dialect_options": {"postgresql_using": "gist", "_column_flag": True},
+        "unique": False,
+    }
+    assert indexes[1] == {
+        "name": "idx_lake_id",
+        "column_names": ["id"],
+        "column_sorting": {"id": ("nulls_first",)},
+        "unique": False,
+    }
 
 
 @pytest.mark.parametrize(
@@ -106,6 +166,30 @@ def test_geom_from_wkb_literal_compile():
         compiled
         == "ST_GeomFromWKB(decode('0101000000000000000000f03f0000000000000040', 'hex'), 4326)"
     )
+
+
+@pytest.mark.parametrize(
+    "wkb",
+    [
+        WKBElement("0101000000000000000000f03f0000000000000040", srid=4326),
+        WKBElement("0101000020e6100000000000000000f03f0000000000000040", extended=True),
+    ],
+)
+def test_bind_processor_converts_wkb_to_ewkt(wkb):
+    assert cockroachdb_type.bind_processor_process(Geometry(), wkb) == "SRID=4326;POINT (1 2)"
+
+
+@pytest.mark.parametrize(
+    ("spatial_type", "bindvalue", "expected"),
+    [
+        (Geometry(srid=4326), "POINT(1 2)", "SRID=4326;POINT(1 2)"),
+        (Geometry(srid=4326), "SRID=3857;POINT(1 2)", "SRID=3857;POINT(1 2)"),
+        (Geometry(), "POINT(1 2)", "POINT(1 2)"),
+        (Geometry(srid=4326), WKTElement("POINT(1 2)"), "SRID=4326;POINT(1 2)"),
+    ],
+)
+def test_bind_processor_adds_column_srid_to_wkt(spatial_type, bindvalue, expected):
+    assert cockroachdb_type.bind_processor_process(spatial_type, bindvalue) == expected
 
 
 @pytest.mark.parametrize(

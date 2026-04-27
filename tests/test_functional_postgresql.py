@@ -21,6 +21,7 @@ from sqlalchemy import __version__ as SA_VERSION
 from sqlalchemy import bindparam
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql.psycopg2 import PGDialect_psycopg2
+from sqlalchemy.exc import DataError
 from sqlalchemy.exc import InternalError
 from sqlalchemy.orm import declarative_base
 from sqlalchemy.sql import func
@@ -35,10 +36,12 @@ from geoalchemy2.elements import WKTElement
 from geoalchemy2.exc import ArgumentError
 from geoalchemy2.shape import from_shape
 
+from . import format_wkt
 from . import select
 from . import skip_pg12_sa1217
 from . import skip_postgis1
 from . import skip_postgis2
+from . import test_only_with_dialects
 
 SQLA_LT_2 = parse_version(SA_VERSION) <= parse_version("1.4")
 if SQLA_LT_2:
@@ -59,6 +62,7 @@ class TestIndex:
         assert not indices[1].get("unique")
         assert indices[1].get("column_names")[0] in ("geom1", "geom2")
 
+    @test_only_with_dialects("postgresql")
     def test_n_d_index(self, conn, IndexTestWithNDIndex, setup_tables):
         sql = text(
             """SELECT
@@ -126,6 +130,7 @@ class TestIndex:
         assert not indices[0].get("unique")
         assert indices[0].get("column_names") == ["three_d_geom"]
 
+    @test_only_with_dialects("postgresql")
     def test_all_indexes(self, conn):
         BaseArgTest = declarative_base(metadata=MetaData())
 
@@ -300,12 +305,13 @@ class TestInsertionCore:
         for row in rows:
             assert isinstance(row[2], WKBElement)
             wkt = conn.execute(row[2].ST_AsText()).scalar()
-            assert wkt == "POINT(1 1)"
+            assert format_wkt(wkt) == "POINT(1 1)"
             srid = conn.execute(row[2].ST_SRID()).scalar()
             assert srid == 4326
             assert row[2] == from_shape(Point(1, 1), srid=4326)
 
 
+@test_only_with_dialects("postgresql")
 class TestInsertionORM:
     def test_Raster(self, session, Ocean, setup_tables):
         skip_postgis1(session)
@@ -334,6 +340,7 @@ class TestInsertionORM:
         assert bottom_right is None
 
 
+@test_only_with_dialects("postgresql")
 class TestUpdateORM:
     def test_Raster(self, session, Ocean, setup_tables):
         skip_postgis1(session)
@@ -384,6 +391,7 @@ class TestUpdateORM:
         ).fetchall() == [(5, 5)]
 
 
+@test_only_with_dialects("postgresql")
 class TestTypMod:
     def test_SummitConstraints(self, conn, Summit, setup_tables):
         """Make sure the geometry column of table Summit is created with `use_typmod=False`.
@@ -418,6 +426,7 @@ class TestCallFunction:
         session.expire(p)
         return p.id
 
+    @test_only_with_dialects("postgresql")
     def test_ST_Dump(self, session, Lake, setup_one_lake):
         lake_id = setup_one_lake
         lake = session.query(Lake).get(lake_id)
@@ -451,6 +460,7 @@ class TestCallFunction:
 
         assert r2.data == r3.data == r4.data == r5.data
 
+    @test_only_with_dialects("postgresql")
     def test_ST_DumpPoints(self, session, Lake, setup_one_lake):
         lake_id = setup_one_lake
         lake = session.query(Lake).get(lake_id)
@@ -476,7 +486,7 @@ class TestCallFunction:
         assert p2 == "POINT(1 1)"
 
     def test_ST_Buffer_Mixed_SRID(self, session, Lake, setup_one_lake):
-        with pytest.raises(InternalError):
+        with pytest.raises((InternalError, DataError)):
             session.query(Lake).filter(func.ST_Within("POINT(0 0)", Lake.geom.ST_Buffer(2))).one()
 
     def test_ST_Distance_type_coerce(self, session, Poi, setup_one_poi):
@@ -491,13 +501,14 @@ class TestCallFunction:
     def test_ST_AsGeoJson_feature(self, session, Lake, setup_one_lake):
         skip_postgis1(session)
         skip_postgis2(session)
+        lake_id = setup_one_lake
         # Test feature
         s2 = select([func.ST_AsGeoJSON(Lake, "geom")])
         r2 = session.execute(s2).scalar()
         assert loads(r2) == {
             "type": "Feature",
             "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
-            "properties": {"id": 1},
+            "properties": {"id": lake_id},
         }
 
         # Test feature with subquery
@@ -507,7 +518,7 @@ class TestCallFunction:
         assert loads(r3) == {
             "type": "Feature",
             "geometry": {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
-            "properties": {"dummy_attr": 10, "id": 1},
+            "properties": {"dummy_attr": 10, "id": lake_id},
         }
 
     @pytest.mark.parametrize(
@@ -659,6 +670,7 @@ class TestSTAsGeoJson:
         )
 
 
+@test_only_with_dialects("postgresql")
 class TestSTSummaryStatsAgg:
     def test_st_summary_stats_agg(self, session, Ocean, setup_tables):
         # Create a new raster

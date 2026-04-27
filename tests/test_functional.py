@@ -237,8 +237,11 @@ class TestAdmin:
 
         assert marks == ["before_create", "after_create", "before_drop", "after_drop"]
 
-    def test_computed_column_core(self, conn):
+    def test_computed_column_core(self, conn, dialect_name):
         meta = MetaData()
+        computed_expr = "ST_POINT(x, y)"
+        if dialect_name == "cockroachdb":
+            computed_expr = "ST_SetSRID(ST_POINT(x::FLOAT8, y::FLOAT8), 4326)"
 
         # Define the table
         t = Table(
@@ -250,7 +253,7 @@ class TestAdmin:
             Column(
                 "computed_geom",
                 Geometry(geometry_type="POINT", srid=4326),
-                Computed("ST_POINT(x, y)", persisted=True),
+                Computed(computed_expr, persisted=True),
             ),
         )
 
@@ -287,7 +290,11 @@ class TestAdmin:
         # Drop the table
         meta.drop_all(bind=conn)
 
-    def test_computed_column_orm(self, conn, base, metadata):
+    def test_computed_column_orm(self, conn, base, metadata, dialect_name):
+        computed_expr = "ST_POINT(x, y)"
+        if dialect_name == "cockroachdb":
+            computed_expr = "ST_SetSRID(ST_POINT(x::FLOAT8, y::FLOAT8), 4326)"
+
         # Define the table
         class ComputedGeomTable(base):
             __tablename__ = "computed_column"
@@ -296,7 +303,7 @@ class TestAdmin:
             y = Column(Integer)
             computed_geom = Column(
                 Geometry(geometry_type="POINT", srid=4326),
-                Computed("ST_POINT(x, y)", persisted=True),
+                Computed(computed_expr, persisted=True),
             )
 
             def __init__(self, computed_geom):
@@ -488,7 +495,7 @@ class TestInsertionCore:
             {"geom": WKTElement(inserted_wkt, srid=4326)},
             {"geom": WKTElement(f"SRID=4326;{inserted_wkt}")},
         ]
-        if dialect_name not in ["postgresql", "sqlite"] or not has_m:
+        if dialect_name not in ["postgresql", "cockroachdb", "sqlite"] or not has_m:
             # Use the DB to generate the corresponding raw WKB
             if dialect_name == "mssql":
                 raw_wkb = conn.execute(
@@ -847,7 +854,7 @@ class TestUpdateORM:
             # Check what was updated in DB
             assert lake.geom is None
             cols = [Lake.id, Lake.geom]
-            assert session.execute(select(cols)).fetchall() == [(1, None)]
+            assert session.execute(select(cols)).fetchall() == [(lake.id, None)]
 
         # Reset geometry to initial value
         lake.geom = WKTElement(raw_wkt, srid=4326)
@@ -889,7 +896,7 @@ class TestUpdateORM:
             # Check what was updated in DB
             assert lake.geom is None
             cols = [Lake.id, Lake.geom]
-            assert session.execute(select(cols)).fetchall() == [(1, None)]
+            assert session.execute(select(cols)).fetchall() == [(lake.id, None)]
 
         # Reset geometry to initial value
         lake.geom = initial_value
@@ -919,7 +926,7 @@ class TestUpdateORM:
         lake.geom = 1
 
         # Update in DB
-        if dialect_name in ["postgresql", "mssql"]:
+        if dialect_name in ["postgresql", "cockroachdb", "mssql"]:
             with pytest.raises(ProgrammingError):
                 # Call __eq__() operator of _SpatialElement with 'other' argument equal to 1
                 # so the lake instance is detected as different and is thus updated but with
@@ -957,7 +964,7 @@ class TestCallFunction:
     def test_ST_GeometryType(self, session, Lake, setup_one_lake, dialect_name):
         lake_id = setup_one_lake
 
-        if dialect_name == "postgresql":
+        if dialect_name in ["postgresql", "cockroachdb"]:
             expected_geometry_type = "ST_LineString"
         elif dialect_name == "mssql":
             expected_geometry_type = "LineString"
@@ -1070,7 +1077,11 @@ class TestCallFunction:
 
     def test_unknown_function_column(self, session, Lake, setup_one_lake, dialect_name):
         s = select([func.ST_UnknownFunction(Lake.__table__.c.geom, 2)])
-        exc = ProgrammingError if dialect_name in ["postgresql", "mssql"] else OperationalError
+        exc = (
+            ProgrammingError
+            if dialect_name in ["postgresql", "cockroachdb", "mssql"]
+            else OperationalError
+        )
         with pytest.raises(exc, match="ST_UnknownFunction"):
             session.execute(s)
 
@@ -1079,7 +1090,11 @@ class TestCallFunction:
         lake = session.query(Lake).get(lake_id)
 
         s = select([func.ST_UnknownFunction(lake.geom, 2)])
-        exc = ProgrammingError if dialect_name in ["postgresql", "mssql"] else OperationalError
+        exc = (
+            ProgrammingError
+            if dialect_name in ["postgresql", "cockroachdb", "mssql"]
+            else OperationalError
+        )
         with pytest.raises(exc):
             # TODO: here the query fails because of a
             # "(psycopg2.ProgrammingError) can't adapt type 'WKBElement'"
@@ -1415,7 +1430,7 @@ class TestAsBinaryWKT:
             as_binary = "ST_AsText"
             ElementType = WKTElement
 
-        dialects_with_srid = ["geopackage", "mysql", "mariadb", "mssql"]
+        dialects_with_srid = ["geopackage", "mysql", "mariadb", "mssql", "cockroachdb"]
 
         # Define the table
         cols = [
@@ -1480,7 +1495,9 @@ class TestCompileQuery:
         query = select([func.ST_AsText(elem)])
         compiled_with_literal = str(query.compile(conn, compile_kwargs={"literal_binds": True}))
         res_text = conn.execute(text(compiled_with_literal)).scalar()
-        expected_text = "POINT (1 2)" if conn.dialect.name == "mssql" else "POINT(1 2)"
+        expected_text = (
+            "POINT (1 2)" if conn.dialect.name in ["cockroachdb", "mssql"] else "POINT(1 2)"
+        )
         assert res_text == expected_text
 
         compiled_without_literal = str(query.compile(conn, compile_kwargs={"literal_binds": False}))
