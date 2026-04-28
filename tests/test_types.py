@@ -4,10 +4,18 @@ import pytest
 from sqlalchemy import Column
 from sqlalchemy import MetaData
 from sqlalchemy import Table
+from sqlalchemy.dialects import mysql
+from sqlalchemy.dialects import postgresql
+from sqlalchemy.dialects import sqlite
+from sqlalchemy.dialects.mysql import mariadb as mariadb_dialect
 from sqlalchemy.sql import func
 from sqlalchemy.sql import insert
 from sqlalchemy.sql import text
 
+from geoalchemy2.admin.dialects import mariadb as _mariadb_admin  # noqa: F401
+from geoalchemy2.admin.dialects import mysql as _mysql_admin  # noqa: F401
+from geoalchemy2.admin.dialects import postgresql as _postgresql_admin  # noqa: F401
+from geoalchemy2.admin.dialects import sqlite as _sqlite_admin  # noqa: F401
 from geoalchemy2.admin.dialects.geopackage import GeoPackageDialect
 from geoalchemy2.elements import WKBElement
 from geoalchemy2.exc import ArgumentError
@@ -15,8 +23,15 @@ from geoalchemy2.types import Geography
 from geoalchemy2.types import Geometry
 from geoalchemy2.types import Raster
 from geoalchemy2.types.dialects import geopackage as geopackage_type
+from geoalchemy2.types.dialects import mariadb as mariadb_type
+from geoalchemy2.types.dialects import mysql as mysql_type
+from geoalchemy2.types.dialects import postgresql as postgresql_type
+from geoalchemy2.types.dialects import sqlite as sqlite_type
 
 from . import select
+
+WKB_HEX = "0101000000000000000000f03f0000000000000040"
+EWKB_HEX = "0101000020e6100000000000000000f03f0000000000000040"
 
 
 def eq_sql(a, b):
@@ -223,9 +238,161 @@ class TestGeometryCollection:
         assert g.get_col_spec() == "geometry(GEOMETRYCOLLECTION,900913)"
 
 
+class TestMySQLWKBConstructors:
+    @staticmethod
+    def normalize_sql(sql):
+        return re.sub(r"\s+", " ", str(sql)).strip()
+
+    def test_geom_from_ewkb_compiles_to_supported_wkb_constructor(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=4326))
+
+        compiled_expr = expr.compile(dialect=mysql.dialect())
+        compiled = self.normalize_sql(compiled_expr)
+
+        assert compiled == "ST_GeomFromWKB(%s, 4326)"
+        assert compiled_expr.params == {"param_1": bytes.fromhex(WKB_HEX)}
+
+    def test_geom_from_ewkb_literal_compile_strips_ewkb_srid(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=4326))
+
+        compiled = self.normalize_sql(
+            expr.compile(dialect=mysql.dialect(), compile_kwargs={"literal_binds": True})
+        )
+
+        assert compiled == f"ST_GeomFromWKB(unhex('{WKB_HEX}'), 4326)"
+
+    def test_geom_from_ewkb_prefers_embedded_srid_over_return_type_srid(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=3857))
+
+        compiled = self.normalize_sql(expr.compile(dialect=mysql.dialect()))
+
+        assert compiled == "ST_GeomFromWKB(%s, 4326)"
+
+    def test_geom_from_ewkb_uses_embedded_srid_without_return_type_srid(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX))
+
+        compiled = self.normalize_sql(expr.compile(dialect=mysql.dialect()))
+
+        assert compiled == "ST_GeomFromWKB(%s, 4326)"
+
+    def test_bind_processor_converts_wkbelement_for_wkb_constructor(self):
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+        assert mysql_type.bind_processor_process(
+            spatial_type, WKBElement(bytes.fromhex(WKB_HEX), srid=4326)
+        ) == bytes.fromhex(WKB_HEX)
+
+    def test_bind_processor_strips_ewkb_for_ewkb_constructor(self):
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromEWKB")
+
+        assert mysql_type.bind_processor_process(
+            spatial_type, WKBElement(bytes.fromhex(EWKB_HEX), extended=True)
+        ) == bytes.fromhex(WKB_HEX)
+
+
+class TestMariaDBWKBConstructors:
+    @staticmethod
+    def normalize_sql(sql):
+        return re.sub(r"\s+", " ", str(sql)).strip()
+
+    def test_geom_from_ewkb_compiles_to_supported_wkb_constructor(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=4326))
+
+        compiled_expr = expr.compile(dialect=mariadb_dialect.MariaDBDialect())
+        compiled = self.normalize_sql(compiled_expr)
+
+        assert compiled == "ST_GeomFromWKB(unhex(%s), 4326)"
+        assert compiled_expr.params == {"param_1": WKB_HEX}
+
+    def test_geom_from_ewkb_literal_compile_strips_ewkb_srid(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=4326))
+
+        compiled = self.normalize_sql(
+            expr.compile(
+                dialect=mariadb_dialect.MariaDBDialect(), compile_kwargs={"literal_binds": True}
+            )
+        )
+
+        assert compiled == f"ST_GeomFromWKB(unhex('{WKB_HEX}'), 4326)"
+
+    def test_geom_from_ewkb_prefers_embedded_srid_over_return_type_srid(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=3857))
+
+        compiled = self.normalize_sql(expr.compile(dialect=mariadb_dialect.MariaDBDialect()))
+
+        assert compiled == "ST_GeomFromWKB(unhex(%s), 4326)"
+
+    def test_geom_from_ewkb_uses_embedded_srid_without_return_type_srid(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX))
+
+        compiled = self.normalize_sql(expr.compile(dialect=mariadb_dialect.MariaDBDialect()))
+
+        assert compiled == "ST_GeomFromWKB(unhex(%s), 4326)"
+
+    def test_bind_processor_converts_wkbelement_for_wkb_constructor(self):
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+        assert (
+            mariadb_type.bind_processor_process(
+                spatial_type, WKBElement(bytes.fromhex(WKB_HEX), srid=4326)
+            )
+            == WKB_HEX
+        )
+
+    def test_bind_processor_strips_ewkb_for_ewkb_constructor(self):
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromEWKB")
+
+        assert (
+            mariadb_type.bind_processor_process(
+                spatial_type, WKBElement(bytes.fromhex(EWKB_HEX), extended=True)
+            )
+            == WKB_HEX
+        )
+
+
+class TestPostgreSQLWKBConstructors:
+    @staticmethod
+    def normalize_sql(sql):
+        return re.sub(r"\s+", " ", str(sql)).strip()
+
+    def test_geom_from_ewkb_compile_omits_srid_parameter(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=4326))
+
+        compiled = self.normalize_sql(expr.compile(dialect=postgresql.dialect()))
+
+        assert compiled == "ST_GeomFromEWKB(%(ST_GeomFromEWKB_1)s)"
+
+    def test_bind_processor_preserves_wkbelement_for_wkb_constructor(self):
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+        assert postgresql_type.bind_processor_process(
+            spatial_type, WKBElement(bytes.fromhex(WKB_HEX), srid=4326)
+        ) == bytes.fromhex(WKB_HEX)
+
+
+class TestSQLiteWKBConstructors:
+    @staticmethod
+    def normalize_sql(sql):
+        return re.sub(r"\s+", " ", str(sql)).strip()
+
+    def test_geom_from_ewkb_compile_omits_srid_parameter(self):
+        expr = func.ST_GeomFromEWKB(bytes.fromhex(EWKB_HEX), type_=Geometry(srid=4326))
+
+        compiled = self.normalize_sql(expr.compile(dialect=sqlite.dialect()))
+
+        assert compiled == "GeomFromEWKB(?)"
+
+    def test_bind_processor_preserves_wkbelement_for_wkb_constructor(self):
+        spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+        assert sqlite_type.bind_processor_process(
+            spatial_type, WKBElement(bytes.fromhex(WKB_HEX), srid=4326)
+        ) == bytes.fromhex(WKB_HEX)
+
+
 class TestGeoPackage:
-    WKB_HEX = "0101000000000000000000f03f0000000000000040"
-    EWKB_HEX = "0101000020e6100000000000000000f03f0000000000000040"
+    WKB_HEX = WKB_HEX
+    EWKB_HEX = EWKB_HEX
 
     def normalize_sql(self, sql):
         return re.sub(r"\s+", " ", str(sql)).strip()
