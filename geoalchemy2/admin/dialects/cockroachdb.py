@@ -184,7 +184,12 @@ def reflect_geometry_column(inspector, table, column_info):
             return
         column_info["type"] = spatial_type
 
-    return postgresql.reflect_geometry_column(inspector, table, column_info)
+    return postgresql.reflect_geometry_column(
+        inspector,
+        table,
+        column_info,
+        spatial_index_am_names=("gist", "gin", "inverted"),
+    )
 
 
 def before_create(table, bind, **kw):

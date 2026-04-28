@@ -215,7 +215,7 @@ def _monkey_patch_get_indexes_for_cockroachdb():
             dialect_options = idx.setdefault("dialect_options", {})
             if dialect_options.get("postgresql_ops") == {column_name: None}:
                 dialect_options.pop("postgresql_ops")
-            if dialect_options.get("postgresql_using") == "inverted":
+            if dialect_options.get("postgresql_using") in {"gin", "inverted"}:
                 dialect_options["postgresql_using"] = "gist"
             dialect_options["_column_flag"] = True
 
