@@ -68,7 +68,8 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
     class ExternalCockroachDBDialect:
         default_schema_name = "public"
 
-        def get_indexes(self, connection, table_name, schema=None, **kw):
+        @staticmethod
+        def _raw_indexes():
             return [
                 {
                     "name": "idx_lake_geom",
@@ -98,6 +99,20 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
                 },
             ]
 
+        def get_indexes(self, connection, table_name, schema=None, **kw):
+            return self._raw_indexes()
+
+        def get_multi_indexes(
+            self,
+            connection,
+            schema=None,
+            filter_names=None,
+            scope=None,
+            kind=None,
+            **kw,
+        ):
+            return {(schema, "lake"): self._raw_indexes()}.items()
+
     class Connection:
         def execute(self, statement, params):
             assert params == {"schema": "public", "table_name": "lake"}
@@ -113,8 +128,21 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
     monkeypatch.setitem(sys.modules, "sqlalchemy_cockroachdb.base", base)
 
     alembic_helpers._monkey_patch_get_indexes_for_cockroachdb()
+    patched_get_indexes = ExternalCockroachDBDialect.get_indexes
+    patched_get_multi_indexes = ExternalCockroachDBDialect.get_multi_indexes
+    alembic_helpers._monkey_patch_get_indexes_for_cockroachdb()
+
+    assert ExternalCockroachDBDialect.get_indexes is patched_get_indexes
+    assert ExternalCockroachDBDialect.get_multi_indexes is patched_get_multi_indexes
 
     indexes = ExternalCockroachDBDialect().get_indexes(Connection(), "lake")
+    multi_indexes = dict(
+        ExternalCockroachDBDialect().get_multi_indexes(
+            Connection(),
+            schema="public",
+            filter_names=["lake"],
+        )
+    )
 
     assert indexes[0] == {
         "name": "idx_lake_geom",
@@ -134,6 +162,7 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
         "column_sorting": {"id": ("nulls_first",)},
         "unique": False,
     }
+    assert multi_indexes[("public", "lake")] == indexes
 
 
 @pytest.mark.parametrize(
