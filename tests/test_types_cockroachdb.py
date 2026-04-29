@@ -179,8 +179,9 @@ class _CockroachReflectionBind:
 
 
 class _CockroachReflectionInspector:
-    def __init__(self, bind):
+    def __init__(self, bind, info_cache=None):
         self.bind = bind
+        self.info_cache = {} if info_cache is None else info_cache
 
 
 @pytest.mark.parametrize(
@@ -237,6 +238,59 @@ def test_reflect_geometry_column_resolves_nulltype_with_schema_before_index_chec
     assert column_info["type"].spatial_index is True
     assert column_info["type"]._spatial_index_reflected is True
     assert bind.calls[0][1] == {"schema": "gis", "table_name": "lake"}
+
+
+def test_reflect_geometry_column_reuses_spatial_type_map_cache():
+    bind = _CockroachReflectionBind(
+        spatial_index=True,
+        spatial_type_rows=[("geom", "geometry(LINESTRING,4326)")],
+    )
+    inspector = _CockroachReflectionInspector(bind, info_cache={})
+    table = Table("lake", MetaData(), schema="gis")
+
+    cockroachdb_admin.reflect_geometry_column(
+        inspector,
+        table,
+        {"name": "geom", "type": NullType()},
+    )
+    cockroachdb_admin.reflect_geometry_column(
+        inspector,
+        table,
+        {"name": "geom", "type": NullType()},
+    )
+
+    information_schema_calls = [
+        call for call in bind.calls if "information_schema.columns" in call[0]
+    ]
+    assert len(information_schema_calls) == 1
+
+
+def test_spatial_type_map_cache_returns_fresh_type_instances():
+    info_cache = {}
+    bind = _CockroachReflectionBind(
+        spatial_index=True,
+        spatial_type_rows=[("geom", "geometry(LINESTRING,4326)")],
+    )
+
+    first = cockroachdb_admin._get_spatial_type_map(
+        bind,
+        "lake",
+        "gis",
+        info_cache=info_cache,
+    )
+    second = cockroachdb_admin._get_spatial_type_map(
+        bind,
+        "lake",
+        "gis",
+        info_cache=info_cache,
+    )
+
+    assert first["geom"] is not second["geom"]
+    assert first["geom"].geometry_type == second["geom"].geometry_type == "LINESTRING"
+    information_schema_calls = [
+        call for call in bind.calls if "information_schema.columns" in call[0]
+    ]
+    assert len(information_schema_calls) == 1
 
 
 def test_geometry_and_geography_compile():

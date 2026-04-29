@@ -38,7 +38,14 @@ def _get_spatial_type(type_name):
     )
 
 
-def _get_spatial_type_map(bind, table_name, schema):
+def _get_spatial_type_map(bind, table_name, schema, info_cache=None):
+    cache_key = ("geoalchemy2_cockroachdb_spatial_type_map", schema, table_name)
+    if info_cache is not None and cache_key in info_cache:
+        return {
+            column_name: _get_spatial_type(type_name)
+            for column_name, type_name in info_cache[cache_key].items()
+        }
+
     try:
         rows = bind.execute(
             text(
@@ -53,10 +60,14 @@ def _get_spatial_type_map(bind, table_name, schema):
         return {}
 
     spatial_types = {}
+    spatial_type_names = {}
     for row in rows:
         spatial_type = _get_spatial_type(row[1])
         if spatial_type is not None:
             spatial_types[row[0]] = spatial_type
+            spatial_type_names[row[0]] = row[1]
+    if info_cache is not None:
+        info_cache[cache_key] = spatial_type_names
     return spatial_types
 
 
@@ -80,6 +91,7 @@ def _patch_get_columns(cockroachdb_base):
             conn,
             table_name,
             schema or self.default_schema_name,
+            info_cache=kw.get("info_cache"),
         )
         for column in columns:
             spatial_type = spatial_types.get(column["name"])
@@ -179,6 +191,7 @@ def reflect_geometry_column(inspector, table, column_info):
             inspector.bind,
             table.name,
             table.schema or inspector.bind.dialect.default_schema_name,
+            info_cache=getattr(inspector, "info_cache", None),
         ).get(column_info["name"])
         if spatial_type is None:
             return

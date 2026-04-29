@@ -1,4 +1,5 @@
 import re
+import weakref
 
 import pytest
 from sqlalchemy import Column
@@ -490,6 +491,125 @@ class TestMySQLWKBConstructors:
         assert expanded_params["wkb"] is ewkb
         assert expanded_params[wkb_key] is ewkb
         assert expanded_params[srid_key] is ewkb
+
+    def test_before_execute_skips_non_wkb_runtime_params(self, monkeypatch):
+        class Conn:
+            dialect = mysql.dialect()
+
+        def collect_source_binds(clauseelement):
+            raise AssertionError("non-WKB params should not traverse the statement")
+
+        monkeypatch.setattr(
+            _mysql_admin,
+            "_collect_mysql_dynamic_ewkb_source_binds",
+            collect_source_binds,
+        )
+        stmt = select([bindparam("id")])
+        params = {"id": 1}
+
+        result = _mysql_admin.before_execute(Conn(), stmt, (), params, {})
+
+        assert result == (stmt, (), params)
+
+    def test_before_execute_skips_text_clause(self, monkeypatch):
+        class Conn:
+            dialect = mysql.dialect()
+
+        def collect_source_binds(clauseelement):
+            raise AssertionError("text clauses should not traverse the statement")
+
+        monkeypatch.setattr(
+            _mysql_admin,
+            "_collect_mysql_dynamic_ewkb_source_binds",
+            collect_source_binds,
+        )
+        stmt = text("SELECT :wkb")
+        params = {"wkb": bytes.fromhex(EWKB_HEX)}
+
+        result = _mysql_admin.before_execute(Conn(), stmt, (), params, {})
+
+        assert result == (stmt, (), params)
+
+    def test_before_execute_caches_dynamic_bind_discovery(self, monkeypatch):
+        class Conn:
+            dialect = mysql.dialect()
+
+        calls = []
+
+        def collect_source_binds(clauseelement):
+            calls.append(clauseelement)
+            return ()
+
+        monkeypatch.setattr(
+            _mysql_admin,
+            "_MYSQL_DYNAMIC_EWKB_SOURCE_BIND_CACHE",
+            weakref.WeakKeyDictionary(),
+        )
+        monkeypatch.setattr(
+            _mysql_admin,
+            "_collect_mysql_dynamic_ewkb_source_binds_uncached",
+            collect_source_binds,
+        )
+        stmt = select([bindparam("blob")])
+        params = {"blob": None}
+
+        _mysql_admin.before_execute(Conn(), stmt, (), params, {})
+        _mysql_admin.before_execute(Conn(), stmt, (), params, {})
+
+        assert calls == [stmt]
+
+    def test_before_execute_avoids_statement_compile_for_named_bindparam(self, monkeypatch):
+        class Conn:
+            dialect = mysql.dialect()
+
+        def compile_bind_name_map(clauseelement, dialect):
+            raise AssertionError("named bindparams should not need a statement compile")
+
+        monkeypatch.setattr(
+            _mysql_admin,
+            "_compile_mysql_statement_bind_name_map",
+            compile_bind_name_map,
+        )
+        source_bind = bindparam("wkb")
+        stmt = select([func.ST_GeomFromEWKB(source_bind)])
+        ewkb = bytes.fromhex(EWKB_HEX)
+
+        _, _, expanded_params = _mysql_admin.before_execute(
+            Conn(),
+            stmt,
+            (),
+            {"wkb": ewkb},
+            {},
+        )
+
+        wkb_key, srid_key = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind)
+        assert expanded_params[wkb_key] is ewkb
+        assert expanded_params[srid_key] is ewkb
+
+    def test_before_execute_wraps_multivalue_dml_without_runtime_params(self):
+        class Conn:
+            dialect = mysql.dialect()
+
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(srid=3857, from_text="ST_GeomFromEWKB")),
+        )
+        stmt = insert(table).values([{"geom": bindparam("wkb", bytes.fromhex(EWKB_HEX))}])
+
+        clauseelement, multiparams, params = _mysql_admin.before_execute(
+            Conn(),
+            stmt,
+            (),
+            {},
+            {},
+        )
+
+        assert multiparams == ()
+        assert params == {}
+        assert "ST_GeomFromWKB" in self.normalize_sql(
+            clauseelement.compile(dialect=mysql.dialect())
+        )
 
     def test_before_execute_expands_defaulted_user_bindparam_override(self):
         class Conn:

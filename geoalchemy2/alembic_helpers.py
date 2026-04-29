@@ -198,6 +198,7 @@ def _monkey_patch_get_indexes_for_cockroachdb():
             connection,
             table_name,
             schema or self.default_schema_name,
+            info_cache=kw.get("info_cache"),
         )
 
         for idx in indexes:

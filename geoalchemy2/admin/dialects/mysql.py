@@ -1,8 +1,11 @@
 """This module defines specific functions for MySQL dialect."""
 
+import contextlib
 import hashlib
 import re
+import weakref
 from collections.abc import Mapping
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.dialects.mysql.base import ischema_names as _mysql_ischema_names
@@ -10,6 +13,7 @@ from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql import expression
 from sqlalchemy.sql import visitors
 from sqlalchemy.sql.elements import BindParameter
+from sqlalchemy.sql.elements import TextClause
 from sqlalchemy.sql.sqltypes import NullType
 from sqlalchemy.types import Integer
 from sqlalchemy.types import LargeBinary
@@ -49,6 +53,10 @@ _POSSIBLE_TYPES = [
 
 _MYSQL_DYNAMIC_EWKB_KEY_PREFIX = "_geoalchemy2_mysql_ewkb"
 _MYSQL_DISABLE_DYNAMIC_EWKB_SPLIT_OPTION = "geoalchemy2_mysql_disable_dynamic_ewkb_split"
+_MYSQL_WKB_HEX = re.compile(r"^[0-9A-Fa-f]+$")
+_MYSQL_DYNAMIC_EWKB_SOURCE_BIND_CACHE: weakref.WeakKeyDictionary[Any, tuple[Any, ...]] = (
+    weakref.WeakKeyDictionary()
+)
 
 
 def reflect_geometry_column(inspector, table, column_info):
@@ -319,6 +327,43 @@ def _mysql_dynamic_ewkb_bind_keys(source_bind, default_srid=0):
     return f"{key_base}_wkb", f"{key_base}_srid"
 
 
+def _is_wkb_hex(value):
+    value = value.strip()
+    return (
+        len(value) >= 10
+        and len(value) % 2 == 0
+        and value[:2] in {"00", "01"}
+        and _MYSQL_WKB_HEX.match(value) is not None
+    )
+
+
+def _value_may_need_dynamic_ewkb(value):
+    if value is None:
+        return True
+    if isinstance(value, (bytes, bytearray, memoryview, WKBElement)):
+        return True
+    if isinstance(value, str):
+        return _is_wkb_hex(value)
+    return False
+
+
+def _mapping_may_need_dynamic_ewkb(parameters):
+    return isinstance(parameters, Mapping) and any(
+        _value_may_need_dynamic_ewkb(value) for value in parameters.values()
+    )
+
+
+def _parameters_may_need_dynamic_ewkb(multiparams, params):
+    if _mapping_may_need_dynamic_ewkb(params):
+        return True
+
+    for parameters in multiparams or ():  # noqa: SIM110
+        if _mapping_may_need_dynamic_ewkb(parameters):
+            return True
+
+    return False
+
+
 def _make_mysql_dynamic_ewkb_bind_clauses(
     wkb_clause,
     *,
@@ -501,8 +546,7 @@ def _iter_dml_value_pairs(value_container, table):
             yield from value_container
             return
 
-        for column, value in zip(table.columns, value_container, strict=False):
-            yield column, value
+        yield from zip(table.columns, value_container, strict=False)
 
 
 def _iter_dml_source_bind_pairs(clauseelement):
@@ -657,7 +701,7 @@ def _collect_mysql_dynamic_ewkb_dml_source_binds(clauseelement):
     return tuple(source_binds)
 
 
-def _collect_mysql_dynamic_ewkb_source_binds(clauseelement):
+def _collect_mysql_dynamic_ewkb_source_binds_uncached(clauseelement):
     if not hasattr(clauseelement, "get_children"):
         return ()
 
@@ -690,6 +734,20 @@ def _collect_mysql_dynamic_ewkb_source_binds(clauseelement):
     return tuple(source_binds)
 
 
+def _collect_mysql_dynamic_ewkb_source_binds(clauseelement):
+    try:
+        return _MYSQL_DYNAMIC_EWKB_SOURCE_BIND_CACHE[clauseelement]
+    except KeyError:
+        pass
+    except TypeError:
+        return _collect_mysql_dynamic_ewkb_source_binds_uncached(clauseelement)
+
+    source_binds = _collect_mysql_dynamic_ewkb_source_binds_uncached(clauseelement)
+    with contextlib.suppress(TypeError):
+        _MYSQL_DYNAMIC_EWKB_SOURCE_BIND_CACHE[clauseelement] = source_binds
+    return source_binds
+
+
 def _compile_mysql_statement_bind_name_map(clauseelement, dialect):
     if not hasattr(clauseelement, "compile"):
         return {}
@@ -709,23 +767,55 @@ def _compile_mysql_statement_bind_name_map(clauseelement, dialect):
     return bind_name_map
 
 
-def _get_mysql_dynamic_ewkb_bind_mappings(clauseelement, dialect):
+def _iter_parameter_mappings(multiparams, params):
+    if isinstance(params, Mapping):
+        yield params
+    for parameters in multiparams or ():
+        if isinstance(parameters, Mapping):
+            yield parameters
+
+
+def _parameters_include_any_key(multiparams, params, keys):
+    keys = tuple(key for key in keys if key is not None)
+    if not keys:
+        return False
+
+    for parameters in _iter_parameter_mappings(multiparams, params):
+        if any(key in parameters for key in keys):
+            return True
+    return False
+
+
+def _source_bind_candidate_keys(source_bind):
+    candidate_keys = []
+    for candidate_key in (source_bind.key, getattr(source_bind, "_orig_key", None)):
+        if candidate_key is not None and candidate_key not in candidate_keys:
+            candidate_keys.append(candidate_key)
+    return candidate_keys
+
+
+def _get_mysql_dynamic_ewkb_bind_mappings(clauseelement, dialect, multiparams=(), params=None):
     source_binds = _collect_mysql_dynamic_ewkb_source_binds(clauseelement)
     if not source_binds:
         return ()
 
-    statement_bind_name_map = _compile_mysql_statement_bind_name_map(clauseelement, dialect)
+    if params is None:
+        params = {}
+
+    statement_bind_name_map = None
     dynamic_bind_mappings = []
     for source_bind, default_srid in source_binds:
         source_identifier = _mysql_dynamic_ewkb_bind_identifier(source_bind)
-        candidate_keys = []
-        for candidate_key in (
-            source_bind.key,
-            getattr(source_bind, "_orig_key", None),
-            statement_bind_name_map.get(source_identifier),
-        ):
-            if candidate_key is not None and candidate_key not in candidate_keys:
-                candidate_keys.append(candidate_key)
+        candidate_keys = _source_bind_candidate_keys(source_bind)
+        if not _parameters_include_any_key(multiparams, params, candidate_keys):
+            if statement_bind_name_map is None:
+                statement_bind_name_map = _compile_mysql_statement_bind_name_map(
+                    clauseelement,
+                    dialect,
+                )
+            compiled_name = statement_bind_name_map.get(source_identifier)
+            if compiled_name is not None and compiled_name not in candidate_keys:
+                candidate_keys.append(compiled_name)
 
         wkb_key, srid_key = _mysql_dynamic_ewkb_bind_keys(
             source_bind,
@@ -762,10 +852,20 @@ def _expand_mysql_dynamic_ewkb_param_mapping(parameters, dynamic_bind_mappings):
 
 
 def before_execute(conn, clauseelement, multiparams, params, execution_options):
-    clauseelement = _wrap_mysql_ewkb_multi_values(clauseelement)
+    if isinstance(clauseelement, TextClause):
+        return clauseelement, multiparams, params
+
+    has_multi_values = bool(getattr(clauseelement, "_multi_values", ()) or ())
+    if has_multi_values:
+        clauseelement = _wrap_mysql_ewkb_multi_values(clauseelement)
+    if not _parameters_may_need_dynamic_ewkb(multiparams, params):
+        return clauseelement, multiparams, params
+
     dynamic_bind_mappings = _get_mysql_dynamic_ewkb_bind_mappings(
         clauseelement,
         conn.dialect,
+        multiparams,
+        params,
     )
     if not dynamic_bind_mappings:
         return clauseelement, multiparams, params
