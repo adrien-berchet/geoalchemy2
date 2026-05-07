@@ -349,7 +349,7 @@ def _insert_select_fail_or_success_type(
         else:
             return (OperationalError, AssertionError)
     if (
-        dialect_name in ["postgresql", "sqlite", "geopackage"]
+        dialect_name in ["postgresql", "cockroachdb", "sqlite", "geopackage"]
         and is_default_geom_type
         and not is_extended_output
     ):

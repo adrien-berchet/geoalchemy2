@@ -1,5 +1,7 @@
 """This module defines specific functions for Postgresql dialect."""
 
+import re
+
 import sqlalchemy
 from packaging import version
 from sqlalchemy import Index
@@ -51,7 +53,7 @@ def create_spatial_index(bind, table, col):
     return idx
 
 
-def reflect_geometry_column(inspector, table, column_info):
+def reflect_geometry_column(inspector, table, column_info, spatial_index_am_names=("gist",)):
     """Reflect a column of type Geometry with Postgresql dialect."""
     if not _check_spatial_type(column_info.get("type"), (Geometry, Geography, Raster)):
         return
@@ -65,11 +67,27 @@ def reflect_geometry_column(inspector, table, column_info):
             coord_dimension = 3
 
     # Query to check a given column has spatial index
-    schema_part = f" AND nspname = '{table.schema}'" if table.schema is not None else ""
+    schema_part = " AND n.nspname = :schema_name" if table.schema is not None else ""
+    spatial_index_am_names = tuple(spatial_index_am_names)
+    am_placeholders = []
+    has_index_params = {
+        "table_name": table.name,
+        "col_name": column_info["name"],
+        "col_name_pattern": (
+            rf'(^|[^a-zA-Z0-9_])("?{re.escape(column_info["name"])}"?)'
+            r"($|[^a-zA-Z0-9_])"
+        ),
+    }
+    for idx, am_name in enumerate(spatial_index_am_names):
+        param_name = f"am_name_{idx}"
+        am_placeholders.append(f":{param_name}")
+        has_index_params[param_name] = am_name
+    if table.schema is not None:
+        has_index_params["schema_name"] = table.schema
 
     # Check if the column has a spatial index (the regular expression checks for the column name
     # in the index definition, which is required for functional indexes)
-    has_index_query = """SELECT EXISTS (
+    has_index_query = f"""SELECT EXISTS (
         SELECT 1
         FROM pg_class t
         JOIN pg_namespace n ON n.oid = t.relnamespace
@@ -77,22 +95,22 @@ def reflect_geometry_column(inspector, table, column_info):
         JOIN pg_class i ON i.oid = ix.indexrelid
         JOIN pg_am am ON i.relam = am.oid
         WHERE
-            t.relname = '{table_name}'{schema_part}
-            AND am.amname = 'gist'
+            t.relname = :table_name{schema_part}
+            AND am.amname IN ({", ".join(am_placeholders)})
             AND (
                 EXISTS (
                     SELECT 1
                     FROM pg_attribute a
                     WHERE a.attrelid = t.oid
                     AND a.attnum = ANY(ix.indkey)
-                    AND a.attname = '{col_name}'
+                    AND a.attname = :col_name
                 )
                 OR pg_get_indexdef(
                     ix.indexrelid
-                ) ~ '(^|[^a-zA-Z0-9_])("?{col_name}"?)($|[^a-zA-Z0-9_])'
+                ) ~ :col_name_pattern
             )
-    );""".format(table_name=table.name, col_name=column_info["name"], schema_part=schema_part)
-    spatial_index = inspector.bind.execute(text(has_index_query)).scalar()
+    );"""
+    spatial_index = inspector.bind.execute(text(has_index_query), has_index_params).scalar()
 
     # Set attributes
     if not _check_spatial_type(column_info["type"], Raster):
@@ -216,6 +234,5 @@ def _PostgreSQL_ST_GeomFromWKB(element, compiler, **kw):
 
 
 @compiles(functions.ST_GeomFromEWKB, "postgresql")  # type: ignore
-@compiles(functions.ST_GeomFromEWKB, "cockroachdb")  # type: ignore
 def _PostgreSQL_ST_GeomFromEWKB(element, compiler, **kw):
     return _compile_GeomFromWKB_Postgresql(element, compiler, include_srid=False, **kw)

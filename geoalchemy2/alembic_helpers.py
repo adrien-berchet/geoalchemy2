@@ -176,6 +176,66 @@ def _monkey_patch_get_indexes_for_mysql():
 _monkey_patch_get_indexes_for_mysql()
 
 
+def _normalize_cockroachdb_spatial_indexes(
+    connection,
+    indexes,
+    table_name,
+    schema,
+    default_schema_name,
+    info_cache=None,
+):
+    candidate_columns = [
+        column_names[0]
+        for idx in indexes
+        for column_names in [idx.get("column_names") or []]
+        if len(column_names) == 1
+        and idx.get("name") == _spatial_idx_name(table_name, column_names[0])
+    ]
+    if not candidate_columns:
+        return indexes
+
+    spatial_types = _get_cockroachdb_spatial_type_map(
+        connection,
+        table_name,
+        schema or default_schema_name,
+        info_cache=info_cache,
+    )
+    if not spatial_types:
+        return indexes
+
+    for idx in indexes:
+        column_names = idx.get("column_names") or []
+        if len(column_names) != 1:
+            continue
+
+        column_name = column_names[0]
+        if column_name not in spatial_types or idx.get("name") != _spatial_idx_name(
+            table_name, column_name
+        ):
+            continue
+
+        idx.pop("column_sorting", None)
+        dialect_options = idx.setdefault("dialect_options", {})
+        if dialect_options.get("postgresql_ops") == {column_name: None}:
+            dialect_options.pop("postgresql_ops")
+        if dialect_options.get("postgresql_using") in {"gin", "inverted"}:
+            dialect_options["postgresql_using"] = "gist"
+        dialect_options["_column_flag"] = True
+
+    return indexes
+
+
+def _get_cockroachdb_spatial_type_map(connection, table_name, schema, info_cache=None):
+    from geoalchemy2.admin.dialects.cockroachdb import _get_spatial_type_map
+
+    return _get_spatial_type_map(
+        connection,
+        table_name,
+        schema,
+        info_cache=info_cache,
+    )
+
+
 def _monkey_patch_get_indexes_for_cockroachdb():
     """Monkey patch SQLAlchemy to fix spatial index reflection."""
     try:
@@ -183,47 +243,65 @@ def _monkey_patch_get_indexes_for_cockroachdb():
     except ImportError:
         return
 
-    if hasattr(CockroachDBDialect, "_geoalchemy2_get_indexes_normal_behavior"):
-        return
+    if not hasattr(CockroachDBDialect, "_geoalchemy2_get_indexes_normal_behavior"):
+        normal_behavior = CockroachDBDialect.get_indexes
 
-    normal_behavior = CockroachDBDialect.get_indexes
+        def spatial_behavior(self, connection, table_name, schema=None, **kw):
+            indexes = self._geoalchemy2_get_indexes_normal_behavior(
+                connection, table_name, schema=schema, **kw
+            )
+            return _normalize_cockroachdb_spatial_indexes(
+                connection,
+                indexes,
+                table_name,
+                schema,
+                self.default_schema_name,
+                info_cache=kw.get("info_cache"),
+            )
 
-    def spatial_behavior(self, connection, table_name, schema=None, **kw):
-        from geoalchemy2.admin.dialects.cockroachdb import _get_spatial_type_map
+        spatial_behavior.__doc__ = normal_behavior.__doc__
+        CockroachDBDialect.get_indexes = spatial_behavior
+        CockroachDBDialect._geoalchemy2_get_indexes_normal_behavior = normal_behavior
 
-        indexes = self._geoalchemy2_get_indexes_normal_behavior(
-            connection, table_name, schema=schema, **kw
-        )
-        spatial_types = _get_spatial_type_map(
+    if hasattr(CockroachDBDialect, "get_multi_indexes") and not hasattr(
+        CockroachDBDialect,
+        "_geoalchemy2_get_multi_indexes_normal_behavior",
+    ):
+        normal_multi_behavior = CockroachDBDialect.get_multi_indexes
+
+        def spatial_multi_behavior(
+            self,
             connection,
-            table_name,
-            schema or self.default_schema_name,
-        )
+            schema=None,
+            filter_names=None,
+            scope=None,
+            kind=None,
+            **kw,
+        ):
+            multi_indexes = self._geoalchemy2_get_multi_indexes_normal_behavior(
+                connection,
+                schema=schema,
+                filter_names=filter_names,
+                kind=kind,
+                scope=scope,
+                **kw,
+            )
+            items = multi_indexes.items() if hasattr(multi_indexes, "items") else multi_indexes
+            for table_key, indexes in items:
+                table_schema, table_name = table_key
+                _normalize_cockroachdb_spatial_indexes(
+                    connection,
+                    indexes,
+                    table_name,
+                    table_schema or schema,
+                    self.default_schema_name,
+                    info_cache=kw.get("info_cache"),
+                )
+            return multi_indexes
 
-        for idx in indexes:
-            column_names = idx.get("column_names") or []
-            if len(column_names) != 1:
-                continue
-
-            column_name = column_names[0]
-            if column_name not in spatial_types or idx.get("name") != _spatial_idx_name(
-                table_name, column_name
-            ):
-                continue
-
-            idx.pop("column_sorting", None)
-            dialect_options = idx.setdefault("dialect_options", {})
-            if dialect_options.get("postgresql_ops") == {column_name: None}:
-                dialect_options.pop("postgresql_ops")
-            if dialect_options.get("postgresql_using") == "inverted":
-                dialect_options["postgresql_using"] = "gist"
-            dialect_options["_column_flag"] = True
-
-        return indexes
-
-    spatial_behavior.__doc__ = normal_behavior.__doc__
-    CockroachDBDialect.get_indexes = spatial_behavior
-    CockroachDBDialect._geoalchemy2_get_indexes_normal_behavior = normal_behavior
+        spatial_multi_behavior.__doc__ = normal_multi_behavior.__doc__
+        CockroachDBDialect.get_multi_indexes = spatial_multi_behavior
+        CockroachDBDialect._geoalchemy2_get_multi_indexes_normal_behavior = normal_multi_behavior
 
 
 _monkey_patch_get_indexes_for_cockroachdb()

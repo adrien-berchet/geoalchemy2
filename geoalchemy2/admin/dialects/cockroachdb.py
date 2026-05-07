@@ -6,10 +6,13 @@ import warnings
 from sqlalchemy import text
 from sqlalchemy.exc import SAWarning
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.sqltypes import NullType
 from sqlalchemy.types import TypeDecorator
 
+from geoalchemy2 import functions
 from geoalchemy2.admin.dialects import postgresql
+from geoalchemy2.admin.dialects.common import compile_bin_literal
 from geoalchemy2.exc import ArgumentError
 from geoalchemy2.types import Geography
 from geoalchemy2.types import Geometry
@@ -35,7 +38,14 @@ def _get_spatial_type(type_name):
     )
 
 
-def _get_spatial_type_map(bind, table_name, schema):
+def _get_spatial_type_map(bind, table_name, schema, info_cache=None):
+    cache_key = ("geoalchemy2_cockroachdb_spatial_type_map", schema, table_name)
+    if info_cache is not None and cache_key in info_cache:
+        return {
+            column_name: _get_spatial_type(type_name)
+            for column_name, type_name in info_cache[cache_key].items()
+        }
+
     try:
         rows = bind.execute(
             text(
@@ -50,10 +60,14 @@ def _get_spatial_type_map(bind, table_name, schema):
         return {}
 
     spatial_types = {}
+    spatial_type_names = {}
     for row in rows:
         spatial_type = _get_spatial_type(row[1])
         if spatial_type is not None:
             spatial_types[row[0]] = spatial_type
+            spatial_type_names[row[0]] = row[1]
+    if info_cache is not None:
+        info_cache[cache_key] = spatial_type_names
     return spatial_types
 
 
@@ -77,6 +91,7 @@ def _patch_get_columns(cockroachdb_base):
             conn,
             table_name,
             schema or self.default_schema_name,
+            info_cache=kw.get("info_cache"),
         )
         for column in columns:
             spatial_type = spatial_types.get(column["name"])
@@ -105,6 +120,22 @@ def _register_cockroachdb_types():
 
 
 _register_cockroachdb_types()
+
+
+@compiles(functions.ST_GeomFromEWKB, "cockroachdb")  # type: ignore
+def _CockroachDB_ST_GeomFromEWKB(element, compiler, **kw):
+    clauses = list(element.clauses)
+    if kw.get("literal_binds", False):
+        wkb_clause = compile_bin_literal(clauses[0])
+        prefix = "decode("
+        suffix = ", 'hex')"
+    else:
+        wkb_clause = clauses[0]
+        prefix = ""
+        suffix = ""
+
+    compiled = compiler.process(wkb_clause, **kw)
+    return f"{element.identifier}({prefix}{compiled}{suffix})"
 
 
 def _resolve_spatial_type(column_type, dialect):
@@ -160,12 +191,18 @@ def reflect_geometry_column(inspector, table, column_info):
             inspector.bind,
             table.name,
             table.schema or inspector.bind.dialect.default_schema_name,
+            info_cache=getattr(inspector, "info_cache", None),
         ).get(column_info["name"])
         if spatial_type is None:
             return
         column_info["type"] = spatial_type
 
-    return postgresql.reflect_geometry_column(inspector, table, column_info)
+    return postgresql.reflect_geometry_column(
+        inspector,
+        table,
+        column_info,
+        spatial_index_am_names=("gist", "gin", "inverted"),
+    )
 
 
 def before_create(table, bind, **kw):

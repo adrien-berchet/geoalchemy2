@@ -424,11 +424,23 @@ def reset_alembic_monkeypatch():
 
     try:
         from sqlalchemy_cockroachdb.base import CockroachDBDialect  # type: ignore[import-untyped]
+    except ImportError:
+        return
 
+    try:
         normal_behavior_cockroachdb = CockroachDBDialect._geoalchemy2_get_indexes_normal_behavior
         CockroachDBDialect.get_indexes = normal_behavior_cockroachdb
         del CockroachDBDialect._geoalchemy2_get_indexes_normal_behavior
-    except (AttributeError, ImportError):
+    except AttributeError:
+        pass
+
+    try:
+        normal_multi_behavior_cockroachdb = (
+            CockroachDBDialect._geoalchemy2_get_multi_indexes_normal_behavior
+        )
+        CockroachDBDialect.get_multi_indexes = normal_multi_behavior_cockroachdb
+        del CockroachDBDialect._geoalchemy2_get_multi_indexes_normal_behavior
+    except AttributeError:
         pass
 
 

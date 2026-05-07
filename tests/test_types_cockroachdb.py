@@ -12,6 +12,7 @@ from sqlalchemy.dialects.postgresql.base import PGDialect
 from sqlalchemy.schema import CreateIndex
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import func
+from sqlalchemy.sql.sqltypes import NullType
 
 from geoalchemy2 import Geography
 from geoalchemy2 import Geometry
@@ -67,7 +68,8 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
     class ExternalCockroachDBDialect:
         default_schema_name = "public"
 
-        def get_indexes(self, connection, table_name, schema=None, **kw):
+        @staticmethod
+        def _raw_indexes():
             return [
                 {
                     "name": "idx_lake_geom",
@@ -80,6 +82,16 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
                     "unique": False,
                 },
                 {
+                    "name": "idx_lake_geog",
+                    "column_names": ["geog"],
+                    "column_sorting": {"geog": ("nulls_first",)},
+                    "dialect_options": {
+                        "postgresql_ops": {"geog": None},
+                        "postgresql_using": "gin",
+                    },
+                    "unique": False,
+                },
+                {
                     "name": "idx_lake_id",
                     "column_names": ["id"],
                     "column_sorting": {"id": ("nulls_first",)},
@@ -87,11 +99,26 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
                 },
             ]
 
+        def get_indexes(self, connection, table_name, schema=None, **kw):
+            return self._raw_indexes()
+
+        def get_multi_indexes(
+            self,
+            connection,
+            schema=None,
+            filter_names=None,
+            scope=None,
+            kind=None,
+            **kw,
+        ):
+            return {(schema, "lake"): self._raw_indexes()}.items()
+
     class Connection:
         def execute(self, statement, params):
             assert params == {"schema": "public", "table_name": "lake"}
             return [
                 ("geom", "geometry(LINESTRING,4326)"),
+                ("geog", "geography(POINT,4326)"),
                 ("id", "INT8"),
             ]
 
@@ -101,8 +128,21 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
     monkeypatch.setitem(sys.modules, "sqlalchemy_cockroachdb.base", base)
 
     alembic_helpers._monkey_patch_get_indexes_for_cockroachdb()
+    patched_get_indexes = ExternalCockroachDBDialect.get_indexes
+    patched_get_multi_indexes = ExternalCockroachDBDialect.get_multi_indexes
+    alembic_helpers._monkey_patch_get_indexes_for_cockroachdb()
+
+    assert ExternalCockroachDBDialect.get_indexes is patched_get_indexes
+    assert ExternalCockroachDBDialect.get_multi_indexes is patched_get_multi_indexes
 
     indexes = ExternalCockroachDBDialect().get_indexes(Connection(), "lake")
+    multi_indexes = dict(
+        ExternalCockroachDBDialect().get_multi_indexes(
+            Connection(),
+            schema="public",
+            filter_names=["lake"],
+        )
+    )
 
     assert indexes[0] == {
         "name": "idx_lake_geom",
@@ -111,11 +151,18 @@ def test_alembic_cockroachdb_get_indexes_normalizes_spatial_index(monkeypatch):
         "unique": False,
     }
     assert indexes[1] == {
+        "name": "idx_lake_geog",
+        "column_names": ["geog"],
+        "dialect_options": {"postgresql_using": "gist", "_column_flag": True},
+        "unique": False,
+    }
+    assert indexes[2] == {
         "name": "idx_lake_id",
         "column_names": ["id"],
         "column_sorting": {"id": ("nulls_first",)},
         "unique": False,
     }
+    assert multi_indexes[("public", "lake")] == indexes
 
 
 @pytest.mark.parametrize(
@@ -134,6 +181,145 @@ def test_get_spatial_type(type_name, expected_class, geometry_type, srid, dimens
     assert spatial_type.geometry_type == geometry_type
     assert spatial_type.srid == srid
     assert spatial_type.dimension == dimension
+
+
+class _ScalarResult:
+    def __init__(self, value):
+        self.value = value
+
+    def scalar(self):
+        return self.value
+
+
+class _CockroachReflectionBind:
+    dialect = CockroachDBDialect()
+
+    def __init__(self, spatial_index, spatial_type_rows=()):
+        self.spatial_index = spatial_index
+        self.spatial_type_rows = spatial_type_rows
+        self.calls = []
+
+    def execute(self, statement, params=None):
+        sql = str(statement)
+        self.calls.append((sql, params))
+        if "information_schema.columns" in sql:
+            return self.spatial_type_rows
+        return _ScalarResult(self.spatial_index)
+
+
+class _CockroachReflectionInspector:
+    def __init__(self, bind, info_cache=None):
+        self.bind = bind
+        self.info_cache = {} if info_cache is None else info_cache
+
+
+@pytest.mark.parametrize(
+    "spatial_type",
+    [
+        Geometry(geometry_type="LINESTRING", srid=4326),
+        Geography(geometry_type="POINT", srid=4326),
+    ],
+)
+def test_reflect_geometry_column_accepts_cockroach_internal_spatial_index_ams(spatial_type):
+    bind = _CockroachReflectionBind(spatial_index=True)
+    inspector = _CockroachReflectionInspector(bind)
+    table = Table("lake", MetaData(), schema="gis")
+    column_info = {"name": "geom", "type": spatial_type}
+
+    cockroachdb_admin.reflect_geometry_column(inspector, table, column_info)
+
+    assert column_info["type"].spatial_index is True
+    assert column_info["type"]._spatial_index_reflected is True
+    assert bind.calls[-1][1]["schema_name"] == "gis"
+    assert {bind.calls[-1][1][f"am_name_{idx}"] for idx in range(3)} == {
+        "gist",
+        "gin",
+        "inverted",
+    }
+
+
+def test_reflect_geometry_column_preserves_false_spatial_index_result():
+    bind = _CockroachReflectionBind(spatial_index=False)
+    inspector = _CockroachReflectionInspector(bind)
+    table = Table("lake", MetaData(), schema="gis")
+    column_info = {"name": "geom", "type": Geometry(geometry_type="LINESTRING", srid=4326)}
+
+    cockroachdb_admin.reflect_geometry_column(inspector, table, column_info)
+
+    assert column_info["type"].spatial_index is False
+    assert column_info["type"]._spatial_index_reflected is True
+
+
+def test_reflect_geometry_column_resolves_nulltype_with_schema_before_index_check():
+    bind = _CockroachReflectionBind(
+        spatial_index=True,
+        spatial_type_rows=[("geom", "geometry(LINESTRING,4326)")],
+    )
+    inspector = _CockroachReflectionInspector(bind)
+    table = Table("lake", MetaData(), schema="gis")
+    column_info = {"name": "geom", "type": NullType()}
+
+    cockroachdb_admin.reflect_geometry_column(inspector, table, column_info)
+
+    assert isinstance(column_info["type"], Geometry)
+    assert column_info["type"].geometry_type == "LINESTRING"
+    assert column_info["type"].srid == 4326
+    assert column_info["type"].spatial_index is True
+    assert column_info["type"]._spatial_index_reflected is True
+    assert bind.calls[0][1] == {"schema": "gis", "table_name": "lake"}
+
+
+def test_reflect_geometry_column_reuses_spatial_type_map_cache():
+    bind = _CockroachReflectionBind(
+        spatial_index=True,
+        spatial_type_rows=[("geom", "geometry(LINESTRING,4326)")],
+    )
+    inspector = _CockroachReflectionInspector(bind, info_cache={})
+    table = Table("lake", MetaData(), schema="gis")
+
+    cockroachdb_admin.reflect_geometry_column(
+        inspector,
+        table,
+        {"name": "geom", "type": NullType()},
+    )
+    cockroachdb_admin.reflect_geometry_column(
+        inspector,
+        table,
+        {"name": "geom", "type": NullType()},
+    )
+
+    information_schema_calls = [
+        call for call in bind.calls if "information_schema.columns" in call[0]
+    ]
+    assert len(information_schema_calls) == 1
+
+
+def test_spatial_type_map_cache_returns_fresh_type_instances():
+    info_cache = {}
+    bind = _CockroachReflectionBind(
+        spatial_index=True,
+        spatial_type_rows=[("geom", "geometry(LINESTRING,4326)")],
+    )
+
+    first = cockroachdb_admin._get_spatial_type_map(
+        bind,
+        "lake",
+        "gis",
+        info_cache=info_cache,
+    )
+    second = cockroachdb_admin._get_spatial_type_map(
+        bind,
+        "lake",
+        "gis",
+        info_cache=info_cache,
+    )
+
+    assert first["geom"] is not second["geom"]
+    assert first["geom"].geometry_type == second["geom"].geometry_type == "LINESTRING"
+    information_schema_calls = [
+        call for call in bind.calls if "information_schema.columns" in call[0]
+    ]
+    assert len(information_schema_calls) == 1
 
 
 def test_geometry_and_geography_compile():
@@ -168,15 +354,70 @@ def test_geom_from_wkb_literal_compile():
     )
 
 
+def test_geom_from_ewkb_literal_compile_omits_srid():
+    ewkb = bytes.fromhex("0101000020e6100000000000000000f03f0000000000000040")
+    expr = func.ST_GeomFromEWKB(ewkb, type_=Geometry(srid=4326))
+
+    compiled = normalize_sql(
+        expr.compile(dialect=CockroachDBDialect(), compile_kwargs={"literal_binds": True})
+    )
+
+    assert (
+        compiled
+        == "ST_GeomFromEWKB(decode('0101000020e6100000000000000000f03f0000000000000040', 'hex'))"
+    )
+
+
+def test_geom_from_ewkb_compile_omits_srid_parameter():
+    expr = func.ST_GeomFromEWKB(
+        bytes.fromhex("0101000020e6100000000000000000f03f0000000000000040"),
+        type_=Geometry(srid=4326),
+    )
+
+    compiled = normalize_sql(expr.compile(dialect=CockroachDBDialect()))
+
+    assert compiled == "ST_GeomFromEWKB(%(ST_GeomFromEWKB_1)s)"
+
+
 @pytest.mark.parametrize(
-    "wkb",
+    ("spatial_type", "wkb"),
     [
-        WKBElement("0101000000000000000000f03f0000000000000040", srid=4326),
-        WKBElement("0101000020e6100000000000000000f03f0000000000000040", extended=True),
+        (
+            Geometry(srid=4326),
+            bytes.fromhex("0101000000000000000000f03f0000000000000040"),
+        ),
+        (
+            Geometry(srid=4326),
+            memoryview(bytes.fromhex("0101000000000000000000f03f0000000000000040")),
+        ),
+        (
+            Geometry(),
+            WKBElement("0101000000000000000000f03f0000000000000040", srid=4326),
+        ),
+        (
+            Geometry(),
+            WKBElement("0101000020e6100000000000000000f03f0000000000000040", extended=True),
+        ),
     ],
 )
-def test_bind_processor_converts_wkb_to_ewkt(wkb):
-    assert cockroachdb_type.bind_processor_process(Geometry(), wkb) == "SRID=4326;POINT (1 2)"
+def test_bind_processor_converts_wkb_to_ewkt(spatial_type, wkb):
+    assert cockroachdb_type.bind_processor_process(spatial_type, wkb) == "SRID=4326;POINT (1 2)"
+
+
+@pytest.mark.parametrize(
+    "bindvalue",
+    [
+        bytes.fromhex("0101000000000000000000f03f0000000000000040"),
+        memoryview(bytes.fromhex("0101000000000000000000f03f0000000000000040")),
+        WKBElement(bytes.fromhex("0101000000000000000000f03f0000000000000040")),
+        WKBElement("0101000000000000000000f03f0000000000000040"),
+    ],
+)
+def test_bind_processor_preserves_wkb_for_wkb_constructor(bindvalue):
+    wkb = bytes.fromhex("0101000000000000000000f03f0000000000000040")
+    spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
+
+    assert cockroachdb_type.bind_processor_process(spatial_type, bindvalue) == wkb
 
 
 @pytest.mark.parametrize(
