@@ -18,6 +18,7 @@ from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.schema import CreateTable
 from sqlalchemy.sql import func
 from sqlalchemy.sql import insert
+from sqlalchemy.sql import update
 from sqlalchemy.sql.sqltypes import NullType
 from sqlalchemy.types import TypeDecorator
 
@@ -1359,13 +1360,137 @@ class TestMSSQLBindAndResultProcessing:
             default_srid=3857,
         )
 
-        assert compiled.construct_params() == {
-            wkb_key_4326: wkb,
-            srid_key_4326: wkb,
-            wkb_key_3857: wkb,
-            srid_key_3857: wkb,
+        params = compiled.construct_params()
+        assert set(params) == {wkb_key_4326, srid_key_4326, wkb_key_3857, srid_key_3857}
+        assert params[wkb_key_4326] is wkb
+        assert params[srid_key_4326] is wkb
+        assert params[wkb_key_3857] is wkb
+        assert params[srid_key_3857] is wkb
+        assert calls == ["called"]
+
+    def test_geom_from_ewkb_reused_callable_bind_uses_single_value_for_dynamic_and_fixed_srid(
+        self,
+    ):
+        calls = []
+        wkb = from_shape(Point(1, 2), extended=False).data
+
+        def get_wkb():
+            calls.append("called")
+            return wkb
+
+        source_bind = bindparam("wkb", callable_=get_wkb)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKB(
+                    source_bind,
+                    type_=Geometry(srid=3857),
+                ),
+                func.ST_GeomFromEWKB(source_bind),
+            ]
+        )
+        compiled = stmt.compile(dialect=self.dialect)
+        wkb_key, srid_key = mssql_admin._mssql_dynamic_ewkb_bind_keys(source_bind)
+
+        params = compiled.construct_params()
+        assert set(params) == {"wkb", wkb_key, srid_key}
+        assert params["wkb"] is wkb
+        assert params[wkb_key] is wkb
+        assert params[srid_key] is wkb
+        assert calls == ["called"]
+
+    def test_geom_from_ewkb_distinct_unique_callable_binds_are_not_shared(self):
+        calls = []
+        wkb_values = [
+            from_shape(Point(1, 2), extended=False).data,
+            from_shape(Point(3, 4), extended=False).data,
+        ]
+
+        def get_wkb():
+            value = wkb_values[len(calls)]
+            calls.append(value)
+            return value
+
+        source_bind_1 = bindparam("wkb", callable_=get_wkb, unique=True)
+        source_bind_2 = bindparam("wkb", callable_=get_wkb, unique=True)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKB(source_bind_1, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind_1),
+                func.ST_GeomFromEWKB(source_bind_2, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind_2),
+            ]
+        )
+        compiled = stmt.compile(dialect=self.dialect)
+        wkb_key_1, srid_key_1 = mssql_admin._mssql_dynamic_ewkb_bind_keys(source_bind_1)
+        wkb_key_2, srid_key_2 = mssql_admin._mssql_dynamic_ewkb_bind_keys(source_bind_2)
+
+        params = compiled.construct_params()
+        assert params[wkb_key_1] is wkb_values[0]
+        assert params[srid_key_1] is wkb_values[0]
+        assert params[wkb_key_2] is wkb_values[1]
+        assert params[srid_key_2] is wkb_values[1]
+        assert calls == wkb_values
+
+    def test_geom_from_ewkt_reused_callable_bind_uses_single_value_for_dynamic_and_fixed_srid(
+        self,
+    ):
+        calls = []
+        ewkt = "SRID=4326;POINT(1 2)"
+
+        def get_wkt():
+            calls.append("called")
+            return ewkt
+
+        source_bind = bindparam("wkt", callable_=get_wkt)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKT(
+                    source_bind,
+                    type_=Geometry(srid=3857),
+                ),
+                func.ST_GeomFromEWKT(source_bind),
+            ]
+        )
+        compiled = stmt.compile(dialect=self.dialect)
+        text_key, srid_key = mssql_admin._mssql_dynamic_ewkt_bind_keys(source_bind)
+
+        params = compiled.construct_params()
+        assert params == {
+            "wkt": ewkt,
+            text_key: ewkt,
+            srid_key: ewkt,
         }
         assert calls == ["called"]
+
+    def test_geom_from_ewkt_distinct_unique_callable_binds_are_not_shared(self):
+        calls = []
+        ewkt_values = ["SRID=4326;POINT(1 2)", "SRID=3857;POINT(3 4)"]
+
+        def get_wkt():
+            value = ewkt_values[len(calls)]
+            calls.append(value)
+            return value
+
+        source_bind_1 = bindparam("wkt", callable_=get_wkt, unique=True)
+        source_bind_2 = bindparam("wkt", callable_=get_wkt, unique=True)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKT(source_bind_1, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKT(source_bind_1),
+                func.ST_GeomFromEWKT(source_bind_2, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKT(source_bind_2),
+            ]
+        )
+        compiled = stmt.compile(dialect=self.dialect)
+        text_key_1, srid_key_1 = mssql_admin._mssql_dynamic_ewkt_bind_keys(source_bind_1)
+        text_key_2, srid_key_2 = mssql_admin._mssql_dynamic_ewkt_bind_keys(source_bind_2)
+
+        params = compiled.construct_params()
+        assert params[text_key_1] == ewkt_values[0]
+        assert params[srid_key_1] == ewkt_values[0]
+        assert params[text_key_2] == ewkt_values[1]
+        assert params[srid_key_2] == ewkt_values[1]
+        assert calls == ewkt_values
 
     def test_mssql_before_execute_expands_dynamic_ewkt_bindparams(self):
         source_bind = bindparam("wkt")
@@ -1407,6 +1532,274 @@ class TestMSSQLBindAndResultProcessing:
             wkb_key: ewkb,
             srid_key: ewkb,
         }
+
+    @pytest.mark.parametrize(
+        ("statement_factory", "param_key"),
+        [
+            (lambda table: insert(table), "geom"),
+            (lambda table: insert(table).values(geom=bindparam("wkb")), "wkb"),
+            (lambda table: update(table).values(geom=bindparam("wkb")), "wkb"),
+            (
+                lambda table: update(table).ordered_values((table.c.geom, bindparam("wkb"))),
+                "wkb",
+            ),
+        ],
+    )
+    def test_mssql_before_execute_expands_dml_generated_dynamic_ewkb_binds(
+        self,
+        statement_factory,
+        param_key,
+    ):
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(geometry_type="POINT", srid=-1, from_text="ST_GeomFromEWKB")),
+        )
+        stmt = statement_factory(table)
+        source_bind = bindparam(param_key)
+        wkb_key, srid_key = mssql_admin._mssql_dynamic_ewkb_bind_keys(
+            source_bind,
+            default_srid=0,
+        )
+        ewkb_element = from_shape(Point(1, 2), srid=4326, extended=True)
+        ewkb = ewkb_element.data
+
+        clauseelement, multiparams, expanded_params = mssql_admin.before_execute(
+            type("Conn", (), {"dialect": self.dialect})(),
+            stmt,
+            (),
+            {param_key: ewkb},
+            {},
+        )
+        compiled = clauseelement.compile(dialect=self.dialect)
+        constructed_params = compiled.construct_params(params=expanded_params)
+
+        assert multiparams == ()
+        assert expanded_params[wkb_key] is ewkb
+        assert expanded_params[srid_key] is ewkb
+        assert constructed_params[wkb_key] is ewkb
+        assert bytes(compiled._bind_processors[wkb_key](ewkb)) == bytes(ewkb_element.as_wkb().data)
+        assert compiled._bind_processors[srid_key](ewkb) == 4326
+
+    @pytest.mark.parametrize(
+        ("statement_factory", "param_key"),
+        [
+            (lambda table: insert(table), "geom"),
+            (lambda table: insert(table).values(geom=bindparam("wkt")), "wkt"),
+            (lambda table: update(table).values(geom=bindparam("wkt")), "wkt"),
+            (
+                lambda table: update(table).ordered_values((table.c.geom, bindparam("wkt"))),
+                "wkt",
+            ),
+        ],
+    )
+    def test_mssql_before_execute_expands_dml_generated_dynamic_ewkt_binds(
+        self,
+        statement_factory,
+        param_key,
+    ):
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(geometry_type="POINT", srid=-1, from_text="ST_GeomFromEWKT")),
+        )
+        stmt = statement_factory(table)
+        source_bind = bindparam(param_key)
+        text_key, srid_key = mssql_admin._mssql_dynamic_ewkt_bind_keys(source_bind)
+        ewkt = "SRID=4326;POINT ZM (1 2 3 4)"
+
+        clauseelement, multiparams, expanded_params = mssql_admin.before_execute(
+            type("Conn", (), {"dialect": self.dialect})(),
+            stmt,
+            (),
+            {param_key: ewkt},
+            {},
+        )
+        compiled = clauseelement.compile(dialect=self.dialect)
+        constructed_params = compiled.construct_params(params=expanded_params)
+
+        assert multiparams == ()
+        assert expanded_params[text_key] is ewkt
+        assert expanded_params[srid_key] is ewkt
+        assert constructed_params[text_key] is ewkt
+        assert compiled._bind_processors[text_key](ewkt) == "POINT (1 2 3 4)"
+        assert compiled._bind_processors[srid_key](ewkt) == 4326
+
+    @pytest.mark.parametrize(
+        ("from_text", "value", "key_factory"),
+        [
+            (
+                "ST_GeomFromEWKB",
+                from_shape(Point(1, 2), srid=4326, extended=True).data,
+                lambda source_bind: mssql_admin._mssql_dynamic_ewkb_bind_keys(
+                    source_bind,
+                    default_srid=4326,
+                ),
+            ),
+            (
+                "ST_GeomFromEWKT",
+                "SRID=4326;POINT(1 2)",
+                mssql_admin._mssql_dynamic_ewkt_bind_keys,
+            ),
+        ],
+    )
+    def test_mssql_before_execute_does_not_expand_fixed_srid_dml_binds(
+        self,
+        from_text,
+        value,
+        key_factory,
+    ):
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(geometry_type="POINT", srid=4326, from_text=from_text)),
+        )
+        stmt = insert(table)
+        value_key, srid_key = key_factory(bindparam("geom"))
+
+        clauseelement, multiparams, expanded_params = mssql_admin.before_execute(
+            type("Conn", (), {"dialect": self.dialect})(),
+            stmt,
+            (),
+            {"geom": value},
+            {},
+        )
+
+        assert clauseelement is stmt
+        assert multiparams == ()
+        assert expanded_params == {"geom": value}
+        assert value_key not in expanded_params
+        assert srid_key not in expanded_params
+        assert (
+            clauseelement.compile(dialect=self.dialect).construct_params(
+                params=expanded_params,
+            )["geom"]
+            is value
+        )
+
+    @pytest.mark.parametrize(
+        ("from_text", "bind_name", "key_factory", "values"),
+        [
+            (
+                "ST_GeomFromEWKB",
+                "wkb",
+                lambda source_bind: mssql_admin._mssql_dynamic_ewkb_bind_keys(
+                    source_bind,
+                    default_srid=0,
+                ),
+                (
+                    from_shape(Point(1, 2), srid=4326, extended=True).data,
+                    from_shape(Point(3, 4), srid=3857, extended=True).data,
+                ),
+            ),
+            (
+                "ST_GeomFromEWKT",
+                "wkt",
+                mssql_admin._mssql_dynamic_ewkt_bind_keys,
+                ("SRID=4326;POINT(1 2)", "SRID=3857;POINT(3 4)"),
+            ),
+        ],
+    )
+    def test_mssql_before_execute_expands_dynamic_dml_executemany_rows(
+        self,
+        from_text,
+        bind_name,
+        key_factory,
+        values,
+    ):
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(geometry_type="POINT", srid=-1, from_text=from_text)),
+        )
+        stmt = insert(table).values(geom=bindparam(bind_name))
+        value_key, srid_key = key_factory(bindparam(bind_name))
+        row1 = {bind_name: values[0]}
+        row2 = {bind_name: values[1]}
+        multiparams = ([row1, row2],)
+
+        clauseelement, expanded_multiparams, expanded_params = mssql_admin.before_execute(
+            type("Conn", (), {"dialect": self.dialect})(),
+            stmt,
+            multiparams,
+            {},
+            {},
+        )
+        compiled = clauseelement.compile(dialect=self.dialect)
+
+        assert expanded_params == {}
+        assert expanded_multiparams != multiparams
+        assert expanded_multiparams[0][0][value_key] is values[0]
+        assert expanded_multiparams[0][0][srid_key] is values[0]
+        assert expanded_multiparams[0][1][value_key] is values[1]
+        assert expanded_multiparams[0][1][srid_key] is values[1]
+        assert compiled.construct_params(params=expanded_multiparams[0][0])[value_key] is values[0]
+
+    def test_mssql_before_execute_expands_multivalue_dml_generated_dynamic_ewkb_binds(self):
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(geometry_type="POINT", srid=-1, from_text="ST_GeomFromEWKB")),
+        )
+        stmt = insert(table).values(
+            [
+                {"geom": bindparam("wkb1")},
+                {"geom": bindparam("wkb2")},
+            ]
+        )
+        ewkb1 = from_shape(Point(1, 2), srid=4326, extended=True).data
+        ewkb2 = from_shape(Point(3, 4), srid=3857, extended=True).data
+
+        clauseelement, _, expanded_params = mssql_admin.before_execute(
+            type("Conn", (), {"dialect": self.dialect})(),
+            stmt,
+            (),
+            {"wkb1": ewkb1, "wkb2": ewkb2},
+            {},
+        )
+
+        wkb_key, srid_key = mssql_admin._mssql_dynamic_ewkb_bind_keys(bindparam("wkb1"))
+        assert expanded_params[wkb_key] is ewkb1
+        assert expanded_params[srid_key] is ewkb1
+        wkb_key, srid_key = mssql_admin._mssql_dynamic_ewkb_bind_keys(bindparam("wkb2"))
+        assert expanded_params[wkb_key] is ewkb2
+        assert expanded_params[srid_key] is ewkb2
+        if self.dialect.supports_multivalues_insert:
+            compiled = clauseelement.compile(dialect=self.dialect)
+            assert compiled.construct_params(params=expanded_params)[wkb_key] is ewkb2
+
+    def test_mssql_before_execute_expands_multivalue_dml_generated_dynamic_ewkt_binds(self):
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(geometry_type="POINT", srid=-1, from_text="ST_GeomFromEWKT")),
+        )
+        stmt = insert(table).values(
+            [
+                {"geom": bindparam("wkt1")},
+                {"geom": bindparam("wkt2")},
+            ]
+        )
+        ewkt1 = "SRID=4326;POINT(1 2)"
+        ewkt2 = "SRID=3857;POINT(3 4)"
+
+        clauseelement, _, expanded_params = mssql_admin.before_execute(
+            type("Conn", (), {"dialect": self.dialect})(),
+            stmt,
+            (),
+            {"wkt1": ewkt1, "wkt2": ewkt2},
+            {},
+        )
+
+        text_key, srid_key = mssql_admin._mssql_dynamic_ewkt_bind_keys(bindparam("wkt1"))
+        assert expanded_params[text_key] is ewkt1
+        assert expanded_params[srid_key] is ewkt1
+        text_key, srid_key = mssql_admin._mssql_dynamic_ewkt_bind_keys(bindparam("wkt2"))
+        assert expanded_params[text_key] is ewkt2
+        assert expanded_params[srid_key] is ewkt2
+        if self.dialect.supports_multivalues_insert:
+            compiled = clauseelement.compile(dialect=self.dialect)
+            assert compiled.construct_params(params=expanded_params)[text_key] is ewkt2
 
     def test_mssql_before_execute_expands_reused_ewkb_bind_for_each_default_srid(self):
         source_bind = bindparam("wkb")

@@ -5,6 +5,8 @@ from sqlalchemy.ext.compiler import compiles
 from geoalchemy2 import functions
 from geoalchemy2.admin.dialects.common import compile_bin_literal
 from geoalchemy2.admin.dialects.common import unwrap_wkb_constructor_clauses
+
+# MariaDB uses MySQL's dynamic EWKB split machinery, then renders WKB as hex/unhex.
 from geoalchemy2.admin.dialects.mysql import _compile_srid_arg
 from geoalchemy2.admin.dialects.mysql import _prepare_ewkb_wkb_clause
 from geoalchemy2.admin.dialects.mysql import after_create  # noqa

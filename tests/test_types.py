@@ -1008,6 +1008,64 @@ class TestMySQLWKBConstructors:
         assert fixed_wkb_key not in expanded_params
         assert fixed_srid_key not in expanded_params
 
+    def test_reused_callable_bind_uses_single_value_for_dynamic_and_fixed_srid(self):
+        calls = []
+        wkb = bytes.fromhex(WKB_HEX)
+
+        def get_wkb():
+            calls.append("called")
+            return wkb
+
+        source_bind = bindparam("wkb", callable_=get_wkb)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKB(source_bind, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind),
+            ]
+        )
+        compiled = stmt.compile(dialect=mysql.dialect())
+        wkb_key, srid_key = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind)
+
+        assert compiled.construct_params() == {
+            "wkb": wkb,
+            wkb_key: wkb,
+            srid_key: wkb,
+        }
+        assert calls == ["called"]
+
+    def test_distinct_unique_callable_binds_are_not_shared(self):
+        calls = []
+        wkb_values = [
+            bytes.fromhex(WKB_HEX),
+            bytes.fromhex("010100000000000000000000400000000000000840"),
+        ]
+
+        def get_wkb():
+            value = wkb_values[len(calls)]
+            calls.append(value)
+            return value
+
+        source_bind_1 = bindparam("wkb", callable_=get_wkb, unique=True)
+        source_bind_2 = bindparam("wkb", callable_=get_wkb, unique=True)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKB(source_bind_1, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind_1),
+                func.ST_GeomFromEWKB(source_bind_2, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind_2),
+            ]
+        )
+        compiled = stmt.compile(dialect=mysql.dialect())
+        wkb_key_1, srid_key_1 = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind_1)
+        wkb_key_2, srid_key_2 = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind_2)
+
+        params = compiled.construct_params()
+        assert params[wkb_key_1] is wkb_values[0]
+        assert params[srid_key_1] is wkb_values[0]
+        assert params[wkb_key_2] is wkb_values[1]
+        assert params[srid_key_2] is wkb_values[1]
+        assert calls == wkb_values
+
     def test_before_execute_leaves_already_expanded_dynamic_ewkb_params_unchanged(self):
         class Conn:
             dialect = mysql.dialect()
@@ -1632,6 +1690,64 @@ class TestMariaDBWKBConstructors:
         assert wkb_key not in expanded_params
         assert srid_key not in expanded_params
 
+    def test_reused_callable_bind_uses_single_value_for_dynamic_and_fixed_srid(self):
+        calls = []
+        wkb = bytes.fromhex(WKB_HEX)
+
+        def get_wkb():
+            calls.append("called")
+            return wkb
+
+        source_bind = bindparam("wkb", callable_=get_wkb)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKB(source_bind, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind),
+            ]
+        )
+        compiled = stmt.compile(dialect=mariadb_dialect.MariaDBDialect())
+        wkb_key, srid_key = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind)
+
+        assert compiled.construct_params() == {
+            "wkb": wkb,
+            wkb_key: wkb,
+            srid_key: wkb,
+        }
+        assert calls == ["called"]
+
+    def test_distinct_unique_callable_binds_are_not_shared(self):
+        calls = []
+        wkb_values = [
+            bytes.fromhex(WKB_HEX),
+            bytes.fromhex("010100000000000000000000400000000000000840"),
+        ]
+
+        def get_wkb():
+            value = wkb_values[len(calls)]
+            calls.append(value)
+            return value
+
+        source_bind_1 = bindparam("wkb", callable_=get_wkb, unique=True)
+        source_bind_2 = bindparam("wkb", callable_=get_wkb, unique=True)
+        stmt = select(
+            [
+                func.ST_GeomFromEWKB(source_bind_1, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind_1),
+                func.ST_GeomFromEWKB(source_bind_2, type_=Geometry(srid=3857)),
+                func.ST_GeomFromEWKB(source_bind_2),
+            ]
+        )
+        compiled = stmt.compile(dialect=mariadb_dialect.MariaDBDialect())
+        wkb_key_1, srid_key_1 = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind_1)
+        wkb_key_2, srid_key_2 = _mysql_admin._mysql_dynamic_ewkb_bind_keys(source_bind_2)
+
+        params = compiled.construct_params()
+        assert params[wkb_key_1] is wkb_values[0]
+        assert params[srid_key_1] is wkb_values[0]
+        assert params[wkb_key_2] is wkb_values[1]
+        assert params[srid_key_2] is wkb_values[1]
+        assert calls == wkb_values
+
     def test_before_execute_expands_none_dynamic_ewkb_params_for_mariadb_without_compile(
         self,
         monkeypatch,
@@ -1696,6 +1812,68 @@ class TestMariaDBWKBConstructors:
         assert expanded_multiparams[0][1][srid_key] is wkb
         assert row1 == {"wkb": ewkb}
         assert row2 == {"wkb": wkb}
+
+    @pytest.mark.parametrize(
+        ("admin_module", "dialect"),
+        [
+            (_mysql_admin, mysql.dialect()),
+            (_mariadb_admin, mariadb_dialect.MariaDBDialect()),
+        ],
+    )
+    def test_dynamic_ewkb_dml_helpers_expand_core_statement_shapes(
+        self,
+        admin_module,
+        dialect,
+    ):
+        class Conn:
+            pass
+
+        Conn.dialect = dialect
+        table = Table(
+            "lake",
+            MetaData(),
+            Column("geom", Geometry(srid=0, from_text="ST_GeomFromEWKB")),
+        )
+        ewkb1 = bytes.fromhex(EWKB_HEX)
+        ewkb2 = memoryview(bytes.fromhex(EWKB_HEX))
+
+        implicit_stmt = insert(table)
+        explicit_stmt = insert(table).values(geom=bindparam("wkb"))
+        multivalue_stmt = insert(table).values(
+            [
+                {"geom": bindparam("wkb1")},
+                {"geom": bindparam("wkb2")},
+            ]
+        )
+
+        for stmt, params, source_binds in (
+            (implicit_stmt, {"geom": ewkb1}, (bindparam("geom"),)),
+            (explicit_stmt, {"wkb": ewkb1}, (bindparam("wkb"),)),
+            (
+                multivalue_stmt,
+                {"wkb1": ewkb1, "wkb2": ewkb2},
+                (bindparam("wkb1"), bindparam("wkb2")),
+            ),
+        ):
+            clauseelement, _, expanded_params = admin_module.before_execute(
+                Conn(),
+                stmt,
+                (),
+                params,
+                {},
+            )
+            compiled = clauseelement.compile(dialect=dialect)
+
+            for source_bind in source_binds:
+                wkb_key, srid_key = _mysql_admin._mysql_dynamic_ewkb_bind_keys(
+                    source_bind,
+                    default_srid=0,
+                )
+                assert wkb_key in expanded_params
+                assert srid_key in expanded_params
+                assert compiled.construct_params(params=expanded_params)[wkb_key] is (
+                    ewkb1 if source_bind.key != "wkb2" else ewkb2
+                )
 
     def test_bind_processor_converts_wkbelement_for_wkb_constructor(self):
         spatial_type = Geometry(srid=4326, from_text="ST_GeomFromWKB")
